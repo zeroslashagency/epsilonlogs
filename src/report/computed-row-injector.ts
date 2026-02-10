@@ -64,8 +64,8 @@ export function injectComputedRows(
     if (woStartLog) {
         let summaryText = woDetails?.start_comment || "";
         rows.push({
-            rowId: `log-${woStartLog.id}`,
-            logId: woStartLog.id,
+            rowId: `log-${woStartLog.log_id}`,
+            logId: woStartLog.log_id,
             logTime: new Date(woStartLog.log_time),
             action: "WO_START",
             jobType: segment.jobType,
@@ -112,8 +112,8 @@ export function injectComputedRows(
 
             // SPINDLE_ON — variance on final cycle
             rows.push({
-                rowId: `log-${cycle.onLog.id}`,
-                logId: cycle.onLog.id,
+                rowId: `log-${cycle.onLog.log_id}`,
+                logId: cycle.onLog.log_id,
                 logTime: new Date(cycle.onLog.log_time),
                 action: "SPINDLE_ON",
                 label: block.label,
@@ -130,8 +130,8 @@ export function injectComputedRows(
 
             // SPINDLE_OFF — total on final cycle
             rows.push({
-                rowId: `log-${cycle.offLog.id}`,
-                logId: cycle.offLog.id,
+                rowId: `log-${cycle.offLog.log_id}`,
+                logId: cycle.offLog.log_id,
                 logTime: new Date(cycle.offLog.log_time),
                 action: "SPINDLE_OFF",
                 label: block.label,
@@ -181,20 +181,20 @@ export function injectComputedRows(
                     if (pauseEvt) {
                         const preSec = (new Date(pauseEvt.log_time).getTime() - offTs) / 1000;
                         if (preSec > 0 && preSec <= MAX_LOADING_GAP_SEC) {
-                            rows.push(makeGapRow(`pre-${cycle.offLog.id}`, offTs + 500, preSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel));
+                            rows.push(makeGapRow(`pre-${cycle.offLog.log_id}`, offTs + 500, preSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel));
                         }
                     }
                     if (resumeEvt) {
                         const postSec = (nextOnTs - new Date(resumeEvt.log_time).getTime()) / 1000;
                         if (postSec > 0 && postSec <= MAX_LOADING_GAP_SEC) {
-                            rows.push(makeGapRow(`post-${resumeEvt.id}`, new Date(resumeEvt.log_time).getTime() + 500, postSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel)); // Should this extend block? Only if next is same.
+                            rows.push(makeGapRow(`post-${resumeEvt.log_id}`, new Date(resumeEvt.log_time).getTime() + 500, postSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel)); // Should this extend block? Only if next is same.
                         }
                     }
                 } else if (gapSec > 0 && gapSec <= MAX_LOADING_GAP_SEC) {
                     // This is the standard intra-job loading time. Give it the block label.
-                    rows.push(makeGapRow(`load-${cycle.offLog.id}`, offTs + 500, gapSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel));
+                    rows.push(makeGapRow(`load-${cycle.offLog.log_id}`, offTs + 500, gapSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel));
                 } else if (gapSec > MAX_LOADING_GAP_SEC) {
-                    rows.push(makeGapRow(`idle-${cycle.offLog.id}`, offTs + 500, gapSec, "Idle/Break Time", segment.jobType, operator, woSpecs, undefined)); // Break breaks the block
+                    rows.push(makeGapRow(`idle-${cycle.offLog.log_id}`, offTs + 500, gapSec, "Idle/Break Time", segment.jobType, operator, woSpecs, undefined)); // Break breaks the block
                 }
             }
         }
@@ -210,7 +210,7 @@ export function injectComputedRows(
         let pauseBannerData = undefined;
 
         if (log.action === "WO_PAUSE") {
-            const pair = segment.pausePeriods.find((p: PausePeriod) => p.pauseLog.id === log.id);
+            const pair = segment.pausePeriods.find((p: PausePeriod) => p.pauseLog.log_id === log.log_id);
             if (pair) {
                 durationText = fmtDur(pair.durationSec);
                 const isShiftBreak = pair.durationSec > SHIFT_BREAK_SEC;
@@ -220,7 +220,7 @@ export function injectComputedRows(
 
                 // Insert a Pause Banner row just before the pause event
                 rows.push({
-                    rowId: `pause-banner-${log.id}`,
+                    rowId: `pause-banner-${log.log_id}`,
                     logTime: new Date(log.log_time),
                     jobType: segment.jobType,
                     timestamp: new Date(log.log_time).getTime() - 1,
@@ -239,8 +239,8 @@ export function injectComputedRows(
 
         // Also add the raw event row
         rows.push({
-            rowId: `log-${log.id}`,
-            logId: log.id,
+            rowId: `log-${log.log_id}`,
+            logId: log.log_id,
             logTime: new Date(log.log_time),
             action: log.action,
             durationText,
@@ -255,8 +255,8 @@ export function injectComputedRows(
     // 6. WO_STOP row
     if (woStopLog) {
         rows.push({
-            rowId: `log-${woStopLog.id}`,
-            logId: woStopLog.id,
+            rowId: `log-${woStopLog.log_id}`,
+            logId: woStopLog.log_id,
             logTime: new Date(woStopLog.log_time),
             action: "WO_STOP",
             jobType: segment.jobType,

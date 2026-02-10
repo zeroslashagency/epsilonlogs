@@ -4,16 +4,16 @@ import { DeviceLogEntry } from "./report-types";
  * Normalizes raw API logs:
  * - Parses ISO timestamps to Date objects
  * - Sorts by log_time ASC
- * - Dedupes by ID
+ * - Dedupes by log_id
  */
 export function normalizeLogs(logs: DeviceLogEntry[]): DeviceLogEntry[] {
-    // 1. Dedupe by ID
+    // 1. Dedupe by log_id
     const seenIds = new Set<number>();
     const uniqueLogs: DeviceLogEntry[] = [];
 
     for (const log of logs) {
-        if (!seenIds.has(log.id)) {
-            seenIds.add(log.id);
+        if (!seenIds.has(log.log_id)) {
+            seenIds.add(log.log_id);
             uniqueLogs.push(log);
         }
     }

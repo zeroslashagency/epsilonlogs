@@ -1,11 +1,28 @@
 // --- API Types ---
 
 export interface DeviceLogEntry {
-    id: number;
-    log_time: string; // ISO string from API
+    log_id: number;       // API returns log_id, not id
+    log_time: string;     // ISO string from API
     action: "SPINDLE_ON" | "SPINDLE_OFF" | "WO_START" | "WO_STOP" | "WO_PAUSE" | "WO_RESUME" | string;
     wo_id: number;
     device_id: number;
+    // Rich inline fields from the API
+    wo_name?: string;     // WO ID string e.g. "2893"
+    setting?: string;
+    part_no?: string;
+    alloted_qty?: number;
+    ok_qty?: number;
+    reject_qty?: number;
+    pcl?: string;         // PCL as string from inline data
+    start_name?: string;
+    start_time?: string;
+    end_time?: string;
+    start_comment?: string;
+    stop_comment?: string;
+    status?: string;
+    duration?: number;
+    uid?: number;
+    job_type?: string;
     [key: string]: unknown;
 }
 
@@ -168,8 +185,54 @@ export interface ReportConfig {
     toleranceSec: number;
 }
 
+export interface WoBreakdown {
+    woId: string;
+    partNo: string;
+    operator: string;
+    setting: string;
+    jobs: number;
+    cycles: number;
+    cuttingSec: number;
+    pauseSec: number;
+    loadingSec: number;
+    allotedQty: number;
+    okQty: number;
+    rejectQty: number;
+    pcl: number | null;
+    avgCycleSec: number;
+    startTime: string;
+    endTime: string;
+    durationSec: number;
+}
+
+export interface OperatorSummary {
+    name: string;
+    woCount: number;
+    totalJobs: number;
+    totalCycles: number;
+    totalCuttingSec: number;
+    totalPauseSec: number;
+    avgCycleSec: number;
+}
+
 export interface ReportStats {
     totalJobs: number;
     totalCycles: number;
     totalCuttingSec: number;
+
+    // Time breakdown
+    totalPauseSec: number;
+    totalLoadingUnloadingSec: number;
+    totalIdleSec: number;
+    totalWoDurationSec: number;
+    machineUtilization: number;     // percentage
+
+    // Production quality
+    totalAllotedQty: number;
+    totalOkQty: number;
+    totalRejectQty: number;
+
+    // Detailed breakdowns
+    woBreakdowns: WoBreakdown[];
+    operatorSummaries: OperatorSummary[];
 }
