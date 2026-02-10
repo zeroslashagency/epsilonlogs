@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.npm-cache/
+*.md
+.DS_Store
+logs/
+tmp/
+out/
+coverage/
+.env

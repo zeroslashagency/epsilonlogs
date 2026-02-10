@@ -1,0 +1,48 @@
+{
+  "success": true,
+  "error": null,
+  "result": {
+    "wo": {
+      "id": 306,
+      "wo_id": "2893",
+      "start_uid": 12,
+      "device_id": 15,
+      "setting": "SETTING -1",
+      "start_time": "2026-02-09T11:50:36.027417Z",
+      "end_time": "2026-02-09T16:19:00.766006Z",
+      "part_no": "E-MET 002",
+      "alloted_qty": 75,
+      "start_comment": "Mechine running ",
+      "pcl": 700,
+      "job_type": 1,
+      "target_duration": 0,
+      "ok_qty": 75,
+      "reject_qty": 0,
+      "stop_comment": "25x3=75 mechine cleaning shift finished handling to next shift",
+      "stop_uid": 12,
+      "status": "COMPLETED",
+      "duration": 16104,
+      "start_name": "RamaKrishnan",
+      "stop_name": "RamaKrishnan",
+      "time_saved": -16104,
+      "load_time": 120,
+      "idle_time": 95
+    },
+    "extensions": [
+      {
+        "id": 329,
+        "wo_id": 306,
+        "extension_time": "2026-02-09T16:03:46.481541Z",
+        "extension_comment": "Dinner break ",
+        "extension_duration": 0
+      },
+      {
+        "id": 328,
+        "wo_id": 306,
+        "extension_time": "2026-02-09T13:18:21.945263Z",
+        "extension_comment": "Meating",
+        "extension_duration": 0
+      }
+    ]
+  }
+}
