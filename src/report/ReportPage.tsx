@@ -7,6 +7,7 @@ import { fetchDeviceLogs, fetchAllWoDetails, fetchDeviceNameMap } from './api-cl
 import { buildReport } from './report-builder';
 import { extractWoIds } from './log-normalizer';
 import { formatDuration } from './format-utils';
+import { DateRangePicker } from '../components/ui/DateRangePicker';
 
 const TOKEN = import.meta.env.VITE_API_TOKEN;
 
@@ -92,24 +93,13 @@ export default function ReportPage() {
                             className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
                         />
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Start Date (DD-MM-YYYY HH:MM)</label>
-                        <input
-                            type="text"
-                            value={config.startDate}
-                            onChange={e => setConfig({ ...config, startDate: e.target.value })}
-                            placeholder="DD-MM-YYYY HH:MM"
-                            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">End Date (DD-MM-YYYY HH:MM)</label>
-                        <input
-                            type="text"
-                            value={config.endDate}
-                            onChange={e => setConfig({ ...config, endDate: e.target.value })}
-                            placeholder="DD-MM-YYYY HH:MM"
-                            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+
+                    {/* Date Range Picker */}
+                    <div className="md:col-span-2">
+                        <DateRangePicker
+                            startDate={config.startDate}
+                            endDate={config.endDate}
+                            onChangeStruct={(start, end) => setConfig({ ...config, startDate: start, endDate: end })}
                         />
                     </div>
                     <button
@@ -129,217 +119,219 @@ export default function ReportPage() {
                 )}
             </div>
 
-            {stats && (
-                <div className="space-y-5">
-                    {/* Section Header + Export Buttons */}
-                    <div className="flex items-center justify-between">
-                        <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
-                            <BarChart3 className="h-5 w-5 text-indigo-600" />
-                            Results Analysis
-                        </h2>
-                        <div className="flex items-center gap-3">
-                            <button
-                                onClick={async () => {
-                                    try {
-                                        const { exportToExcel } = await import('./export-utils');
-                                        if (!stats) return;
-                                        await exportToExcel({
-                                            rows,
-                                            stats,
-                                            woDetailsMap,
-                                            deviceNameMap,
-                                            reportConfig: config,
-                                        });
-                                    } catch (err: unknown) {
-                                        const message = err instanceof Error ? err.message : 'Excel export failed.';
-                                        setError(message);
-                                    }
-                                }}
-                                className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium"
-                            >
-                                <Download className="h-4 w-4" />
-                                Export Excel
-                            </button>
-                            <button
-                                onClick={async () => {
-                                    try {
-                                        const { exportToPDF } = await import('./export-utils');
-                                        exportToPDF(rows);
-                                    } catch (err: unknown) {
-                                        const message = err instanceof Error ? err.message : 'PDF export failed.';
-                                        setError(message);
-                                    }
-                                }}
-                                className="flex items-center gap-2 bg-rose-600 text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-medium"
-                            >
-                                <Download className="h-4 w-4" />
-                                Export PDF
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* Panel A: KPI Cards — Row 1 */}
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
-                        <KpiCard
-                            icon={<FileText className="h-4 w-4" />}
-                            label="Total Logs"
-                            value={String(stats.totalLogs)}
-                            color="slate"
-                        />
-                        <KpiCard
-                            icon={<Activity className="h-4 w-4" />}
-                            label="Total Jobs"
-                            value={String(stats.totalJobs)}
-                            color="emerald"
-                        />
-                        <KpiCard
-                            icon={<Zap className="h-4 w-4" />}
-                            label="Total Cycles"
-                            value={String(stats.totalCycles)}
-                            color="indigo"
-                        />
-                        <KpiCard
-                            icon={<Timer className="h-4 w-4" />}
-                            label="Cutting Time"
-                            value={formatDuration(stats.totalCuttingSec)}
-                            color="blue"
-                        />
-                        <KpiCard
-                            icon={<Coffee className="h-4 w-4" />}
-                            label="Pause / Break"
-                            value={formatDuration(stats.totalPauseSec)}
-                            color="amber"
-                        />
-                        <KpiCard
-                            icon={<Loader2 className="h-4 w-4" />}
-                            label="Loading Time"
-                            value={formatDuration(stats.totalLoadingUnloadingSec)}
-                            color="slate"
-                        />
-                        <UtilizationCard utilization={stats.machineUtilization} />
-                    </div>
-
-                    {/* Panel B: Production Quality */}
-                    <div className="bg-white rounded-xl border shadow-sm p-4">
-                        <h3 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
-                            <Package className="h-4 w-4 text-slate-500" />
-                            Production Quality
-                        </h3>
-                        <div className="grid grid-cols-3 gap-4">
-                            <div className="text-center p-3 bg-blue-50 rounded-lg border border-blue-100">
-                                <div className="text-xs text-blue-500 font-medium uppercase tracking-wide">Allotted Qty</div>
-                                <div className="text-2xl font-bold text-blue-700 mt-1">{stats.totalAllotedQty}</div>
-                            </div>
-                            <div className="text-center p-3 bg-emerald-50 rounded-lg border border-emerald-100">
-                                <div className="text-xs text-emerald-500 font-medium uppercase tracking-wide">OK Qty</div>
-                                <div className="text-2xl font-bold text-emerald-700 mt-1">{stats.totalOkQty}</div>
-                            </div>
-                            <div className={`text-center p-3 rounded-lg border ${stats.totalRejectQty > 0 ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
-                                <div className={`text-xs font-medium uppercase tracking-wide ${stats.totalRejectQty > 0 ? 'text-red-500' : 'text-slate-500'}`}>Reject Qty</div>
-                                <div className={`text-2xl font-bold mt-1 ${stats.totalRejectQty > 0 ? 'text-red-700' : 'text-slate-700'}`}>{stats.totalRejectQty}</div>
+            {
+                stats && (
+                    <div className="space-y-5">
+                        {/* Section Header + Export Buttons */}
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                                <BarChart3 className="h-5 w-5 text-indigo-600" />
+                                Results Analysis
+                            </h2>
+                            <div className="flex items-center gap-3">
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            const { exportToExcel } = await import('./export-utils');
+                                            if (!stats) return;
+                                            await exportToExcel({
+                                                rows,
+                                                stats,
+                                                woDetailsMap,
+                                                deviceNameMap,
+                                                reportConfig: config,
+                                            });
+                                        } catch (err: unknown) {
+                                            const message = err instanceof Error ? err.message : 'Excel export failed.';
+                                            setError(message);
+                                        }
+                                    }}
+                                    className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium"
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Export Excel
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            const { exportToPDF } = await import('./export-utils');
+                                            exportToPDF(rows);
+                                        } catch (err: unknown) {
+                                            const message = err instanceof Error ? err.message : 'PDF export failed.';
+                                            setError(message);
+                                        }
+                                    }}
+                                    className="flex items-center gap-2 bg-rose-600 text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-medium"
+                                >
+                                    <Download className="h-4 w-4" />
+                                    Export PDF
+                                </button>
                             </div>
                         </div>
-                    </div>
 
-                    {/* Panel C: WO Breakdown Table */}
-                    {stats.woBreakdowns.length > 0 && (
-                        <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-                            <div className="px-4 py-3 border-b bg-slate-50">
-                                <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                                    <FileText className="h-4 w-4 text-indigo-500" />
-                                    Work Order Breakdown
-                                </h3>
+                        {/* Panel A: KPI Cards — Row 1 */}
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
+                            <KpiCard
+                                icon={<FileText className="h-4 w-4" />}
+                                label="Total Logs"
+                                value={String(stats.totalLogs)}
+                                color="slate"
+                            />
+                            <KpiCard
+                                icon={<Activity className="h-4 w-4" />}
+                                label="Total Jobs"
+                                value={String(stats.totalJobs)}
+                                color="emerald"
+                            />
+                            <KpiCard
+                                icon={<Zap className="h-4 w-4" />}
+                                label="Total Cycles"
+                                value={String(stats.totalCycles)}
+                                color="indigo"
+                            />
+                            <KpiCard
+                                icon={<Timer className="h-4 w-4" />}
+                                label="Cutting Time"
+                                value={formatDuration(stats.totalCuttingSec)}
+                                color="blue"
+                            />
+                            <KpiCard
+                                icon={<Coffee className="h-4 w-4" />}
+                                label="Pause / Break"
+                                value={formatDuration(stats.totalPauseSec)}
+                                color="amber"
+                            />
+                            <KpiCard
+                                icon={<Loader2 className="h-4 w-4" />}
+                                label="Loading Time"
+                                value={formatDuration(stats.totalLoadingUnloadingSec)}
+                                color="slate"
+                            />
+                            <UtilizationCard utilization={stats.machineUtilization} />
+                        </div>
+
+                        {/* Panel B: Production Quality */}
+                        <div className="bg-white rounded-xl border shadow-sm p-4">
+                            <h3 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
+                                <Package className="h-4 w-4 text-slate-500" />
+                                Production Quality
+                            </h3>
+                            <div className="grid grid-cols-3 gap-4">
+                                <div className="text-center p-3 bg-blue-50 rounded-lg border border-blue-100">
+                                    <div className="text-xs text-blue-500 font-medium uppercase tracking-wide">Allotted Qty</div>
+                                    <div className="text-2xl font-bold text-blue-700 mt-1">{stats.totalAllotedQty}</div>
+                                </div>
+                                <div className="text-center p-3 bg-emerald-50 rounded-lg border border-emerald-100">
+                                    <div className="text-xs text-emerald-500 font-medium uppercase tracking-wide">OK Qty</div>
+                                    <div className="text-2xl font-bold text-emerald-700 mt-1">{stats.totalOkQty}</div>
+                                </div>
+                                <div className={`text-center p-3 rounded-lg border ${stats.totalRejectQty > 0 ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                                    <div className={`text-xs font-medium uppercase tracking-wide ${stats.totalRejectQty > 0 ? 'text-red-500' : 'text-slate-500'}`}>Reject Qty</div>
+                                    <div className={`text-2xl font-bold mt-1 ${stats.totalRejectQty > 0 ? 'text-red-700' : 'text-slate-700'}`}>{stats.totalRejectQty}</div>
+                                </div>
                             </div>
-                            <div className="overflow-x-auto">
-                                <table className="min-w-full text-xs">
-                                    <thead>
-                                        <tr className="bg-slate-100 text-slate-600">
-                                            <th className="px-3 py-2 text-left font-semibold">WO ID</th>
-                                            <th className="px-3 py-2 text-left font-semibold">Part No</th>
-                                            <th className="px-3 py-2 text-left font-semibold">Operator</th>
-                                            <th className="px-3 py-2 text-left font-semibold">Setting</th>
-                                            <th className="px-3 py-2 text-center font-semibold">Jobs</th>
-                                            <th className="px-3 py-2 text-center font-semibold">Cycles</th>
-                                            <th className="px-3 py-2 text-right font-semibold">Cutting</th>
-                                            <th className="px-3 py-2 text-right font-semibold">Pause</th>
-                                            <th className="px-3 py-2 text-right font-semibold">Loading</th>
-                                            <th className="px-3 py-2 text-center font-semibold">PCL</th>
-                                            <th className="px-3 py-2 text-right font-semibold">Avg Cycle</th>
-                                            <th className="px-3 py-2 text-center font-semibold">Allot</th>
-                                            <th className="px-3 py-2 text-center font-semibold">OK</th>
-                                            <th className="px-3 py-2 text-center font-semibold">Reject</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {stats.woBreakdowns.map((wo, i) => (
-                                            <tr key={wo.woId} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                                                <td className="px-3 py-2 font-semibold text-indigo-700">{wo.woId}</td>
-                                                <td className="px-3 py-2 text-slate-700">{wo.partNo || '—'}</td>
-                                                <td className="px-3 py-2 text-slate-700">{wo.operator}</td>
-                                                <td className="px-3 py-2 text-slate-500">{wo.setting || '—'}</td>
-                                                <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.jobs}</td>
-                                                <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.cycles}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(wo.cuttingSec)}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-amber-700">{formatDuration(wo.pauseSec)}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(wo.loadingSec)}</td>
-                                                <td className="px-3 py-2 text-center text-slate-600">{wo.pcl ? formatDuration(wo.pcl) : '—'}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(wo.avgCycleSec)}</td>
-                                                <td className="px-3 py-2 text-center text-blue-700 font-medium">{wo.allotedQty}</td>
-                                                <td className="px-3 py-2 text-center text-emerald-700 font-medium">{wo.okQty}</td>
-                                                <td className={`px-3 py-2 text-center font-medium ${wo.rejectQty > 0 ? 'text-red-600 font-bold' : 'text-slate-400'}`}>{wo.rejectQty}</td>
+                        </div>
+
+                        {/* Panel C: WO Breakdown Table */}
+                        {stats.woBreakdowns.length > 0 && (
+                            <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+                                <div className="px-4 py-3 border-b bg-slate-50">
+                                    <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                                        <FileText className="h-4 w-4 text-indigo-500" />
+                                        Work Order Breakdown
+                                    </h3>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full text-xs">
+                                        <thead>
+                                            <tr className="bg-slate-100 text-slate-600">
+                                                <th className="px-3 py-2 text-left font-semibold">WO ID</th>
+                                                <th className="px-3 py-2 text-left font-semibold">Part No</th>
+                                                <th className="px-3 py-2 text-left font-semibold">Operator</th>
+                                                <th className="px-3 py-2 text-left font-semibold">Setting</th>
+                                                <th className="px-3 py-2 text-center font-semibold">Jobs</th>
+                                                <th className="px-3 py-2 text-center font-semibold">Cycles</th>
+                                                <th className="px-3 py-2 text-right font-semibold">Cutting</th>
+                                                <th className="px-3 py-2 text-right font-semibold">Pause</th>
+                                                <th className="px-3 py-2 text-right font-semibold">Loading</th>
+                                                <th className="px-3 py-2 text-center font-semibold">PCL</th>
+                                                <th className="px-3 py-2 text-right font-semibold">Avg Cycle</th>
+                                                <th className="px-3 py-2 text-center font-semibold">Allot</th>
+                                                <th className="px-3 py-2 text-center font-semibold">OK</th>
+                                                <th className="px-3 py-2 text-center font-semibold">Reject</th>
                                             </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                        </thead>
+                                        <tbody>
+                                            {stats.woBreakdowns.map((wo, i) => (
+                                                <tr key={wo.woId} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                                                    <td className="px-3 py-2 font-semibold text-indigo-700">{wo.woId}</td>
+                                                    <td className="px-3 py-2 text-slate-700">{wo.partNo || '—'}</td>
+                                                    <td className="px-3 py-2 text-slate-700">{wo.operator}</td>
+                                                    <td className="px-3 py-2 text-slate-500">{wo.setting || '—'}</td>
+                                                    <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.jobs}</td>
+                                                    <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.cycles}</td>
+                                                    <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(wo.cuttingSec)}</td>
+                                                    <td className="px-3 py-2 text-right font-mono text-amber-700">{formatDuration(wo.pauseSec)}</td>
+                                                    <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(wo.loadingSec)}</td>
+                                                    <td className="px-3 py-2 text-center text-slate-600">{wo.pcl ? formatDuration(wo.pcl) : '—'}</td>
+                                                    <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(wo.avgCycleSec)}</td>
+                                                    <td className="px-3 py-2 text-center text-blue-700 font-medium">{wo.allotedQty}</td>
+                                                    <td className="px-3 py-2 text-center text-emerald-700 font-medium">{wo.okQty}</td>
+                                                    <td className={`px-3 py-2 text-center font-medium ${wo.rejectQty > 0 ? 'text-red-600 font-bold' : 'text-slate-400'}`}>{wo.rejectQty}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        )}
 
-                    {/* Panel D: Operator Summary */}
-                    {stats.operatorSummaries.length > 0 && (
-                        <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-                            <div className="px-4 py-3 border-b bg-slate-50">
-                                <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                                    <Users className="h-4 w-4 text-violet-500" />
-                                    Operator Summary
-                                </h3>
-                            </div>
-                            <div className="overflow-x-auto">
-                                <table className="min-w-full text-xs">
-                                    <thead>
-                                        <tr className="bg-slate-100 text-slate-600">
-                                            <th className="px-3 py-2 text-left font-semibold">Operator</th>
-                                            <th className="px-3 py-2 text-center font-semibold">WOs Handled</th>
-                                            <th className="px-3 py-2 text-center font-semibold">Jobs</th>
-                                            <th className="px-3 py-2 text-center font-semibold">Cycles</th>
-                                            <th className="px-3 py-2 text-right font-semibold">Cutting Time</th>
-                                            <th className="px-3 py-2 text-right font-semibold">Pause Time</th>
-                                            <th className="px-3 py-2 text-right font-semibold">Avg Cycle</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {stats.operatorSummaries.map((op, i) => (
-                                            <tr key={op.name} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                                                <td className="px-3 py-2 font-semibold text-violet-700">{op.name}</td>
-                                                <td className="px-3 py-2 text-center font-medium text-slate-800">{op.woCount}</td>
-                                                <td className="px-3 py-2 text-center font-medium text-slate-800">{op.totalJobs}</td>
-                                                <td className="px-3 py-2 text-center font-medium text-slate-800">{op.totalCycles}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(op.totalCuttingSec)}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-amber-700">{formatDuration(op.totalPauseSec)}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(op.avgCycleSec)}</td>
+                        {/* Panel D: Operator Summary */}
+                        {stats.operatorSummaries.length > 0 && (
+                            <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+                                <div className="px-4 py-3 border-b bg-slate-50">
+                                    <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                                        <Users className="h-4 w-4 text-violet-500" />
+                                        Operator Summary
+                                    </h3>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full text-xs">
+                                        <thead>
+                                            <tr className="bg-slate-100 text-slate-600">
+                                                <th className="px-3 py-2 text-left font-semibold">Operator</th>
+                                                <th className="px-3 py-2 text-center font-semibold">WOs Handled</th>
+                                                <th className="px-3 py-2 text-center font-semibold">Jobs</th>
+                                                <th className="px-3 py-2 text-center font-semibold">Cycles</th>
+                                                <th className="px-3 py-2 text-right font-semibold">Cutting Time</th>
+                                                <th className="px-3 py-2 text-right font-semibold">Pause Time</th>
+                                                <th className="px-3 py-2 text-right font-semibold">Avg Cycle</th>
                                             </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                        </thead>
+                                        <tbody>
+                                            {stats.operatorSummaries.map((op, i) => (
+                                                <tr key={op.name} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                                                    <td className="px-3 py-2 font-semibold text-violet-700">{op.name}</td>
+                                                    <td className="px-3 py-2 text-center font-medium text-slate-800">{op.woCount}</td>
+                                                    <td className="px-3 py-2 text-center font-medium text-slate-800">{op.totalJobs}</td>
+                                                    <td className="px-3 py-2 text-center font-medium text-slate-800">{op.totalCycles}</td>
+                                                    <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(op.totalCuttingSec)}</td>
+                                                    <td className="px-3 py-2 text-right font-mono text-amber-700">{formatDuration(op.totalPauseSec)}</td>
+                                                    <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(op.avgCycleSec)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
-                        </div>
-                    )}
-                </div>
-            )}
+                        )}
+                    </div>
+                )
+            }
 
             {/* Report Table */}
             <ReportTable rows={rows} loading={loading} />
-        </div>
+        </div >
     );
 }
 

@@ -289,9 +289,19 @@ describe('report export mapping', () => {
 
     const mapped = mapReportRowToLogsSheetRow(row, woDetailsMap, deviceNameMap);
     expect(mapped['Summary / Notes']).toContain('1) WO INFO');
-    expect(mapped['Summary / Notes']).toContain('2) TIME/KPI');
+    expect(mapped['Summary / Notes']).toContain('2) TIME / KPI');
     expect(mapped['Summary / Notes']).toContain('3) OUTPUT + COMMENTS');
     expect(mapped['Summary / Notes']).toContain('Allot: 57 | OK: 63 | Reject: 0');
+    expect(mapped['Job Type']).toBe('');
+    expect(mapped['Device Name']).toBe('');
+    expect(mapped['WO Name']).toBe('');
+    expect(mapped['UID ID']).toBe('');
+    expect(mapped['UID Name']).toBe('');
+    expect(mapped.Setting).toBe('');
+    expect(mapped['Part No']).toBe('');
+    expect(mapped['Alloted Qty']).toBe('');
+    expect(mapped['Start Comment']).toBe('');
+    expect(mapped.PCL).toBe('');
   });
 
   it('resolves uid names by start_uid/stop_uid then falls back to start_name', () => {

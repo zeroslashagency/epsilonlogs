@@ -572,16 +572,20 @@ function resolveSummaryNotes(row: ReportRow, woDetails?: WoDetails): string {
         const summary = row.woSummaryData;
         const pauseReasonsText = summary.pauseReasons.length > 0 ? summary.pauseReasons.join(', ') : '—';
         lines.push('1) WO INFO');
-        lines.push(`Part: ${summary.partNo} | Operator: ${summary.operatorName}`);
-        lines.push(`Device: ${summary.deviceId} | Setting: ${summary.setting}`);
-        lines.push(`WO: ${summary.woIdStr} | PCL: ${pclText}`);
+        lines.push(`Part: ${summary.partNo}`);
+        lines.push(`Operator: ${summary.operatorName}`);
+        lines.push(`Device: ${summary.deviceId}`);
+        lines.push(`Setting: ${summary.setting}`);
+        lines.push(`WO: ${summary.woIdStr}`);
+        lines.push(`PCL: ${pclText}`);
         lines.push('');
-        lines.push('2) TIME/KPI');
+        lines.push('2) TIME / KPI');
         lines.push(`Start: ${summary.startTime || '—'}`);
         lines.push(`End: ${summary.endTime || '—'}`);
         lines.push(`Duration: ${summary.totalDuration}`);
         lines.push(`Jobs: ${summary.totalJobs} | Cycles: ${summary.totalCycles}`);
-        lines.push(`Cutting: ${summary.totalCuttingTime} | Pause: ${summary.totalPauseTime}`);
+        lines.push(`Cutting: ${summary.totalCuttingTime}`);
+        lines.push(`Pause: ${summary.totalPauseTime}`);
         lines.push('');
         lines.push('3) OUTPUT + COMMENTS');
         lines.push(`Allot: ${summary.allotedQty} | OK: ${summary.okQty} | Reject: ${summary.rejectQty}`);
@@ -668,6 +672,7 @@ export function mapReportRowToLogsSheetRow(
 ): LogsSheetRow {
     const woDetails = resolveWoDetails(row, woDetailsMap);
     const uidId = resolveUidId(row, woDetails);
+    const isWoSummaryRow = !!row.isWoSummary;
 
     return {
         'S.No': row.sNo ?? '',
@@ -675,16 +680,16 @@ export function mapReportRowToLogsSheetRow(
         Action: resolveExportAction(row),
         'Job Tag': resolveJobTag(row),
         'Summary / Notes': resolveSummaryNotes(row, woDetails),
-        'Job Type': row.jobType || '',
-        'Device Name': resolveDeviceName(row, woDetails, deviceNameMap),
-        'WO Name': resolveWoName(row, woDetails),
-        'UID ID': uidId ?? '',
-        'UID Name': resolveUidName(row, uidId, woDetails),
-        Setting: resolveSetting(row, woDetails),
-        'Part No': resolvePartNo(row, woDetails),
-        'Alloted Qty': resolveAllotedQty(row, woDetails),
-        'Start Comment': resolveStartComment(row, woDetails),
-        PCL: resolvePcl(row, woDetails),
+        'Job Type': isWoSummaryRow ? '' : row.jobType || '',
+        'Device Name': isWoSummaryRow ? '' : resolveDeviceName(row, woDetails, deviceNameMap),
+        'WO Name': isWoSummaryRow ? '' : resolveWoName(row, woDetails),
+        'UID ID': isWoSummaryRow ? '' : uidId ?? '',
+        'UID Name': isWoSummaryRow ? '' : resolveUidName(row, uidId, woDetails),
+        Setting: isWoSummaryRow ? '' : resolveSetting(row, woDetails),
+        'Part No': isWoSummaryRow ? '' : resolvePartNo(row, woDetails),
+        'Alloted Qty': isWoSummaryRow ? '' : resolveAllotedQty(row, woDetails),
+        'Start Comment': isWoSummaryRow ? '' : resolveStartComment(row, woDetails),
+        PCL: isWoSummaryRow ? '' : resolvePcl(row, woDetails),
     };
 }
 
@@ -709,7 +714,6 @@ function resolveRowVisual(row: ReportRow, groupMeta: JobGroupMeta): ExportRowVis
         return {
             fillColor: LOG_STYLE_COLORS.woSummaryBg,
             fontColor: LOG_STYLE_COLORS.whiteText,
-            bold: true,
         };
     }
 
