@@ -2,6 +2,16 @@ import { DeviceLogApiResponse, DeviceLogEntry, ReportConfig, WoDetails } from ".
 
 const API_BASE_URL = "/api/v2";
 
+interface DevicesApiResponse {
+    success: boolean;
+    result?: {
+        devices?: Array<{
+            id?: number;
+            name?: string;
+        }>;
+    };
+}
+
 /**
  * Fetches ALL pages of device logs for the given config.
  */
@@ -87,6 +97,8 @@ export async function fetchWoDetails(
             pcl: wo.pcl || null,
             start_time: wo.start_time || null,
             end_time: wo.end_time || null,
+            start_uid: wo.start_uid || null,
+            stop_uid: wo.stop_uid || null,
             extensions: extensions.map((ext: any) => ({
                 id: ext.id || 0,
                 wo_id: ext.wo_id || woId,
@@ -128,7 +140,7 @@ export async function fetchAllWoDetails(
         const promises = batch.map(id => fetchWoDetails(id, token));
         const responses = await Promise.all(promises);
 
-        responses.forEach((wo, index) => {
+        responses.forEach((wo: WoDetails | null, index: number) => {
             if (wo) {
                 results.set(batch[index]!, wo);
             }
@@ -136,6 +148,41 @@ export async function fetchAllWoDetails(
     }
 
     return results;
+}
+
+export async function fetchDeviceNameMap(token: string): Promise<Map<number, string>> {
+    const url = `${API_BASE_URL}/devices`;
+
+    try {
+        const response = await fetch(url, {
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json",
+            },
+        });
+
+        if (!response.ok) {
+            console.warn(`Failed to fetch devices: ${response.status} ${response.statusText}`);
+            return new Map();
+        }
+
+        const json: DevicesApiResponse = await response.json();
+        if (!json.success || !json.result?.devices) {
+            return new Map();
+        }
+
+        const nameMap = new Map<number, string>();
+        for (const device of json.result.devices) {
+            if (typeof device.id === "number" && typeof device.name === "string" && device.name.trim()) {
+                nameMap.set(device.id, device.name.trim());
+            }
+        }
+
+        return nameMap;
+    } catch (error) {
+        console.warn("Failed to fetch device names:", error);
+        return new Map();
+    }
 }
 
 export function formatDateForApi(date: Date): string {

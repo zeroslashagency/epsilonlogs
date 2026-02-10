@@ -16,7 +16,21 @@ const MOCK_WO_DETAILS: WoDetails = {
     pcl: 700,
     start_time: "2026-02-09T08:00:00",
     end_time: null,
-    extensions: []
+    start_uid: 12,
+    stop_uid: 12,
+    extensions: [],
+    wo_id_str: "2893",
+    part_no: "E-MET 002",
+    start_name: "RamaKrishnan",
+    stop_name: "RamaKrishnan",
+    start_comment: "Machine running",
+    stop_comment: "",
+    setting: "SETTING -1",
+    alloted_qty: 75,
+    ok_qty: 75,
+    reject_qty: 0,
+    device_id: 15,
+    duration: 3600,
 };
 
 const MOCK_CONFIG: ReportConfig = {
@@ -33,23 +47,23 @@ const MOCK_CONFIG: ReportConfig = {
 const START_TIME = new Date("2026-02-09T08:00:00").getTime();
 
 const MOCK_LOGS: DeviceLogEntry[] = [
-    { id: 1, log_time: new Date(START_TIME).toISOString(), action: "WO_START", wo_id: 306, device_id: 15 },
+    { log_id: 1, log_time: new Date(START_TIME).toISOString(), action: "WO_START", wo_id: 306, device_id: 15 },
 
     // Ideal Time Gap: 56s
     // First ON at 08:00:56
-    { id: 2, log_time: new Date(START_TIME + 56000).toISOString(), action: "SPINDLE_ON", wo_id: 306, device_id: 15 },
-    { id: 3, log_time: new Date(START_TIME + 56000 + 300000).toISOString(), action: "SPINDLE_OFF", wo_id: 306, device_id: 15 }, // 300s duration
+    { log_id: 2, log_time: new Date(START_TIME + 56000).toISOString(), action: "SPINDLE_ON", wo_id: 306, device_id: 15 },
+    { log_id: 3, log_time: new Date(START_TIME + 56000 + 300000).toISOString(), action: "SPINDLE_OFF", wo_id: 306, device_id: 15 }, // 300s duration
 
     // Loading Time Gap: 20s
-    { id: 4, log_time: new Date(START_TIME + 56000 + 300000 + 20000).toISOString(), action: "SPINDLE_ON", wo_id: 306, device_id: 15 },
-    { id: 5, log_time: new Date(START_TIME + 56000 + 300000 + 20000 + 405000).toISOString(), action: "SPINDLE_OFF", wo_id: 306, device_id: 15 }, // 405s duration
+    { log_id: 4, log_time: new Date(START_TIME + 56000 + 300000 + 20000).toISOString(), action: "SPINDLE_ON", wo_id: 306, device_id: 15 },
+    { log_id: 5, log_time: new Date(START_TIME + 56000 + 300000 + 20000 + 405000).toISOString(), action: "SPINDLE_OFF", wo_id: 306, device_id: 15 }, // 405s duration
 
     // Total job time: 300 + 405 = 705s. PCL 700. Variance +5.
 
     // JOB 02 (Single cycle?)
     // Loading gap: 100s
-    { id: 6, log_time: new Date(START_TIME + 1000000).toISOString(), action: "SPINDLE_ON", wo_id: 306, device_id: 15 },
-    { id: 7, log_time: new Date(START_TIME + 1000000 + 720000).toISOString(), action: "SPINDLE_OFF", wo_id: 306, device_id: 15 }, // 720s (12m). Excess 20s.
+    { log_id: 6, log_time: new Date(START_TIME + 1000000).toISOString(), action: "SPINDLE_ON", wo_id: 306, device_id: 15 },
+    { log_id: 7, log_time: new Date(START_TIME + 1000000 + 720000).toISOString(), action: "SPINDLE_OFF", wo_id: 306, device_id: 15 }, // 720s (12m). Excess 20s.
 ];
 
 async function runVerification() {

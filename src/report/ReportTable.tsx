@@ -74,34 +74,66 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                             const s = row.woSummaryData;
                             return (
                                 <tr key={row.rowId} className="bg-slate-800 text-white">
-                                    <td colSpan={10} className="px-4 py-3">
-                                        <div className="text-xs font-semibold mb-1 text-slate-300">
-                                            📊 WO #{s.woIdStr} Summary
-                                        </div>
-                                        <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
-                                            <span>Device: <strong>{s.deviceId}</strong></span>
-                                            <span>Setting: <strong>{s.setting}</strong></span>
-                                            <span>Start: <strong>{s.startTime}</strong></span>
-                                            <span>End: <strong>{s.endTime}</strong></span>
-                                            <span>Total: <strong>{s.totalDuration}</strong></span>
-                                        </div>
-                                        <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm mt-1">
-                                            <span className="text-emerald-300">{s.totalJobs} Jobs</span>
-                                            <span className="text-emerald-300">{s.totalCycles} Cycles</span>
-                                            <span className="text-emerald-300">Cutting: {s.totalCuttingTime}</span>
-                                            <span>Alloted: <strong>{s.allotedQty}</strong></span>
-                                            <span className="text-emerald-300">OK: {s.okQty}</span>
-                                            {s.rejectQty > 0 && <span className="text-rose-300">Reject: {s.rejectQty}</span>}
-                                            <span className="text-amber-300">Pause: {s.totalPauseTime}</span>
-                                            {s.pauseReasons.length > 0 && (
-                                                <span className="text-amber-200">({s.pauseReasons.join(', ')})</span>
-                                            )}
-                                        </div>
-                                        {s.stopComment && (
-                                            <div className="mt-2 text-xs italic text-slate-400 border-t border-slate-700 pt-1">
-                                                📝 Stop Reason: {s.stopComment}
+                                    <td colSpan={10} className="px-3 py-2 bg-slate-800/95 border-y border-slate-700">
+                                        <div className="flex items-center justify-between gap-4">
+                                            {/* Left: Start Info */}
+                                            <div className="flex flex-col items-start min-w-[140px]">
+                                                <div className="flex items-center gap-1.5 text-emerald-400 text-[10px] font-bold uppercase tracking-wider">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                                    Start
+                                                </div>
+                                                <div className="font-mono text-slate-100 text-xs">{s.startTime}</div>
+                                                {s.startComment && (
+                                                    <div className="text-[10px] italic text-slate-400 mt-0.5 max-w-[150px] truncate" title={s.startComment}>
+                                                        "{s.startComment}"
+                                                    </div>
+                                                )}
                                             </div>
-                                        )}
+
+                                            {/* Center: Metrics & Main Info */}
+                                            <div className="col-span-6 flex flex-col items-center justify-center text-center">
+                                                <div className="text-[10px] font-semibold text-slate-400 mb-0.5 uppercase tracking-widest">
+                                                    WO #{s.woIdStr} Summary
+                                                </div>
+
+                                                {/* Line 1: Times */}
+                                                <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                                                    <span>Dur: <b className="text-slate-200 font-mono">{s.totalDuration}</b></span>
+                                                    <span className="text-slate-600">|</span>
+                                                    <span>Cut: <b className="text-emerald-300 font-mono">{s.totalCuttingTime}</b></span>
+                                                    <span className="text-slate-600">|</span>
+                                                    <span>Pause: <b className="text-amber-300 font-mono">{s.totalPauseTime}</b></span>
+
+                                                </div>
+
+                                                {/* Line 2: Counts */}
+                                                <div className="flex items-center gap-3 text-[11px] text-slate-400 bg-slate-900/50 px-3 py-0.5 rounded-full border border-slate-700/50 mt-0.5">
+                                                    <span>Jobs: <b className="text-slate-200">{s.totalJobs}</b></span>
+                                                    <span className="text-slate-600">/</span>
+                                                    <span>Cyc: <b className="text-slate-200">{s.totalCycles}</b></span>
+                                                    <span className="text-slate-600 mx-1">|</span>
+                                                    <span>Allot: <b className="text-slate-200">{s.allotedQty}</b></span>
+                                                    <span className="text-slate-600">→</span>
+                                                    <span className={s.okQty > 0 ? "text-emerald-400 font-bold" : "text-slate-500"}>OK: {s.okQty}</span>
+                                                    <span className="text-slate-600">/</span>
+                                                    <span className={s.rejectQty > 0 ? "text-rose-400 font-bold" : "text-slate-500"}>Rej: {s.rejectQty}</span>
+                                                </div>
+                                            </div>
+
+                                            {/* Right: End Info */}
+                                            <div className="flex flex-col items-end min-w-[140px] text-right">
+                                                <div className="flex items-center gap-1.5 text-rose-400 text-[10px] font-bold uppercase tracking-wider">
+                                                    End
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                                                </div>
+                                                <div className="font-mono text-slate-100 text-xs">{s.endTime}</div>
+                                                {s.stopComment && (
+                                                    <div className="text-[10px] italic text-slate-400 mt-0.5 max-w-[150px] truncate" title={s.stopComment}>
+                                                        "{s.stopComment}"
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
                                     </td>
                                 </tr>
                             );
@@ -178,31 +210,65 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                     {row.action || ''}
                                 </td>
 
-                                {/* Duration */}
-                                <td className="px-3 py-2 font-mono text-slate-700">
-                                    {row.durationText || ''}
+                                {/* Duration / Part / OK */}
+                                <td className="px-3 py-2 font-mono text-slate-700 align-top">
+                                    {row.startRowData ? (
+                                        <div className="flex flex-col space-y-0.5 text-xs">
+                                            <span className="text-slate-500 font-medium">Part:</span>
+                                            <span className="font-bold text-slate-800">{row.startRowData.partNo}</span>
+                                        </div>
+                                    ) : row.stopRowData ? (
+                                        <div className="flex flex-col space-y-0.5 text-xs">
+                                            <span className="text-emerald-600 font-medium">OK Qty:</span>
+                                            <span className="font-bold text-slate-800">{row.stopRowData.ok}</span>
+                                        </div>
+                                    ) : (
+                                        row.durationText || ''
+                                    )}
                                 </td>
 
-                                {/* Label */}
-                                <td className="px-3 py-2 text-center font-bold text-slate-700">
+                                {/* Label / Allot / Reject */}
+                                <td className="px-3 py-2 text-center text-slate-700 align-top">
                                     {isFirstInBlock && row.jobBlockLabel ? (
                                         <span className="inline-block bg-emerald-600 text-white text-xs px-2 py-0.5 rounded">
                                             {row.jobBlockLabel}
                                         </span>
+                                    ) : row.startRowData ? (
+                                        <div className="flex flex-col space-y-0.5 text-xs text-left">
+                                            <span className="text-slate-500 font-medium">Allot:</span>
+                                            <span className="font-bold text-slate-800">{row.startRowData.allotted}</span>
+                                        </div>
+                                    ) : row.stopRowData ? (
+                                        <div className="flex flex-col space-y-0.5 text-xs text-left">
+                                            <span className="text-rose-600 font-medium">Reject Qty:</span>
+                                            <span className="font-bold text-slate-800">{row.stopRowData.reject}</span>
+                                        </div>
                                     ) : (
-                                        <span>{row.label || ''}</span>
+                                        <span className="font-bold">{row.label || ''}</span>
                                     )}
                                 </td>
 
-                                {/* Summary */}
-                                <td className="px-3 py-2">
-                                    <span className={cn(
-                                        "font-medium",
-                                        row.varianceColor === 'red' ? "text-rose-600" :
-                                            row.varianceColor === 'green' ? "text-emerald-600" : "text-slate-600"
-                                    )}>
-                                        {row.summary || ''}
-                                    </span>
+                                {/* Summary / Comments */}
+                                <td className="px-3 py-2 align-top">
+                                    {row.startRowData ? (
+                                        <div className="flex flex-col space-y-0.5 text-xs">
+                                            <span className="text-slate-500 font-medium">Start Comment:</span>
+                                            <span className="italic text-slate-700">{row.startRowData.comment || '-'}</span>
+                                        </div>
+                                    ) : row.stopRowData ? (
+                                        <div className="flex flex-col space-y-0.5 text-xs">
+                                            <span className="text-slate-500 font-medium">Stop Reason:</span>
+                                            <span className="font-medium text-slate-800">{row.stopRowData.reason || '-'}</span>
+                                        </div>
+                                    ) : (
+                                        <span className={cn(
+                                            "font-medium",
+                                            row.varianceColor === 'red' ? "text-rose-600" :
+                                                row.varianceColor === 'green' ? "text-emerald-600" : "text-slate-600"
+                                        )}>
+                                            {row.summary || ''}
+                                        </span>
+                                    )}
                                 </td>
 
                                 {/* WO Specs */}

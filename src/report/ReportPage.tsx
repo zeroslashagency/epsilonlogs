@@ -2,20 +2,15 @@ import React, { useState } from 'react';
 import { ArrowLeft, FileText, Download, Play, Activity, Users, Package, Timer, Coffee, Loader2, BarChart3, Zap } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { ReportTable } from './ReportTable';
-import { ReportConfig, ReportRow, ReportStats } from './report-types';
-import { fetchDeviceLogs, fetchAllWoDetails, formatDateForApi } from './api-client';
+import { ReportConfig, ReportRow, ReportStats, WoDetails } from './report-types';
+import { fetchDeviceLogs, fetchAllWoDetails, fetchDeviceNameMap } from './api-client';
 import { buildReport } from './report-builder';
 import { extractWoIds } from './log-normalizer';
+import { formatDuration } from './format-utils';
 
 const TOKEN = import.meta.env.VITE_API_TOKEN;
 
-function fmtDur(sec: number): string {
-    if (sec <= 0) return "0s";
-    const m = Math.floor(sec / 60);
-    const s = Math.round(sec % 60);
-    if (m === 0) return `${s}s`;
-    return `${m}m ${s}s`;
-}
+// Local helper removed in favor of format-utils
 
 export default function ReportPage() {
     const [config, setConfig] = useState<ReportConfig>({
@@ -26,8 +21,10 @@ export default function ReportPage() {
     });
 
     const [loading, setLoading] = useState(false);
-    const [rows, setRows] = useState<any[]>([]);
+    const [rows, setRows] = useState<ReportRow[]>([]);
     const [stats, setStats] = useState<ReportStats | null>(null);
+    const [woDetailsMap, setWoDetailsMap] = useState<Map<number, WoDetails>>(new Map());
+    const [deviceNameMap, setDeviceNameMap] = useState<Map<number, string>>(new Map());
     const [error, setError] = useState<string | null>(null);
 
     const handleGenerate = async () => {
@@ -35,6 +32,8 @@ export default function ReportPage() {
         setError(null);
         setRows([]);
         setStats(null);
+        setWoDetailsMap(new Map());
+        setDeviceNameMap(new Map());
 
         try {
             const logs = await fetchDeviceLogs(config, TOKEN);
@@ -46,11 +45,16 @@ export default function ReportPage() {
             }
 
             const woIds = extractWoIds(logs);
-            const detailsMap = await fetchAllWoDetails(woIds, TOKEN);
+            const [detailsMap, fetchedDeviceNameMap] = await Promise.all([
+                fetchAllWoDetails(woIds, TOKEN),
+                fetchDeviceNameMap(TOKEN),
+            ]);
             const { rows: reportRows, stats: reportStats } = buildReport(logs, detailsMap, config);
 
             setRows(reportRows);
             setStats(reportStats);
+            setWoDetailsMap(detailsMap);
+            setDeviceNameMap(fetchedDeviceNameMap);
         } catch (err: any) {
             console.error(err);
             setError(err.message || "An unknown error occurred");
@@ -136,8 +140,20 @@ export default function ReportPage() {
                         <div className="flex items-center gap-3">
                             <button
                                 onClick={async () => {
-                                    const { exportToExcel } = await import('./export-utils');
-                                    exportToExcel(rows);
+                                    try {
+                                        const { exportToExcel } = await import('./export-utils');
+                                        if (!stats) return;
+                                        await exportToExcel({
+                                            rows,
+                                            stats,
+                                            woDetailsMap,
+                                            deviceNameMap,
+                                            reportConfig: config,
+                                        });
+                                    } catch (err: unknown) {
+                                        const message = err instanceof Error ? err.message : 'Excel export failed.';
+                                        setError(message);
+                                    }
                                 }}
                                 className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium"
                             >
@@ -146,8 +162,13 @@ export default function ReportPage() {
                             </button>
                             <button
                                 onClick={async () => {
-                                    const { exportToPDF } = await import('./export-utils');
-                                    exportToPDF(rows);
+                                    try {
+                                        const { exportToPDF } = await import('./export-utils');
+                                        exportToPDF(rows);
+                                    } catch (err: unknown) {
+                                        const message = err instanceof Error ? err.message : 'PDF export failed.';
+                                        setError(message);
+                                    }
                                 }}
                                 className="flex items-center gap-2 bg-rose-600 text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-medium"
                             >
@@ -158,7 +179,13 @@ export default function ReportPage() {
                     </div>
 
                     {/* Panel A: KPI Cards — Row 1 */}
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
+                        <KpiCard
+                            icon={<FileText className="h-4 w-4" />}
+                            label="Total Logs"
+                            value={String(stats.totalLogs)}
+                            color="slate"
+                        />
                         <KpiCard
                             icon={<Activity className="h-4 w-4" />}
                             label="Total Jobs"
@@ -174,19 +201,19 @@ export default function ReportPage() {
                         <KpiCard
                             icon={<Timer className="h-4 w-4" />}
                             label="Cutting Time"
-                            value={fmtDur(stats.totalCuttingSec)}
+                            value={formatDuration(stats.totalCuttingSec)}
                             color="blue"
                         />
                         <KpiCard
                             icon={<Coffee className="h-4 w-4" />}
                             label="Pause / Break"
-                            value={fmtDur(stats.totalPauseSec)}
+                            value={formatDuration(stats.totalPauseSec)}
                             color="amber"
                         />
                         <KpiCard
                             icon={<Loader2 className="h-4 w-4" />}
                             label="Loading Time"
-                            value={fmtDur(stats.totalLoadingUnloadingSec)}
+                            value={formatDuration(stats.totalLoadingUnloadingSec)}
                             color="slate"
                         />
                         <UtilizationCard utilization={stats.machineUtilization} />
@@ -252,11 +279,11 @@ export default function ReportPage() {
                                                 <td className="px-3 py-2 text-slate-500">{wo.setting || '—'}</td>
                                                 <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.jobs}</td>
                                                 <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.cycles}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-blue-700">{fmtDur(wo.cuttingSec)}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-amber-700">{fmtDur(wo.pauseSec)}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-slate-600">{fmtDur(wo.loadingSec)}</td>
-                                                <td className="px-3 py-2 text-center text-slate-600">{wo.pcl ? fmtDur(wo.pcl) : '—'}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-slate-600">{fmtDur(wo.avgCycleSec)}</td>
+                                                <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(wo.cuttingSec)}</td>
+                                                <td className="px-3 py-2 text-right font-mono text-amber-700">{formatDuration(wo.pauseSec)}</td>
+                                                <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(wo.loadingSec)}</td>
+                                                <td className="px-3 py-2 text-center text-slate-600">{wo.pcl ? formatDuration(wo.pcl) : '—'}</td>
+                                                <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(wo.avgCycleSec)}</td>
                                                 <td className="px-3 py-2 text-center text-blue-700 font-medium">{wo.allotedQty}</td>
                                                 <td className="px-3 py-2 text-center text-emerald-700 font-medium">{wo.okQty}</td>
                                                 <td className={`px-3 py-2 text-center font-medium ${wo.rejectQty > 0 ? 'text-red-600 font-bold' : 'text-slate-400'}`}>{wo.rejectQty}</td>
@@ -297,9 +324,9 @@ export default function ReportPage() {
                                                 <td className="px-3 py-2 text-center font-medium text-slate-800">{op.woCount}</td>
                                                 <td className="px-3 py-2 text-center font-medium text-slate-800">{op.totalJobs}</td>
                                                 <td className="px-3 py-2 text-center font-medium text-slate-800">{op.totalCycles}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-blue-700">{fmtDur(op.totalCuttingSec)}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-amber-700">{fmtDur(op.totalPauseSec)}</td>
-                                                <td className="px-3 py-2 text-right font-mono text-slate-600">{fmtDur(op.avgCycleSec)}</td>
+                                                <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(op.totalCuttingSec)}</td>
+                                                <td className="px-3 py-2 text-right font-mono text-amber-700">{formatDuration(op.totalPauseSec)}</td>
+                                                <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(op.avgCycleSec)}</td>
                                             </tr>
                                         ))}
                                     </tbody>

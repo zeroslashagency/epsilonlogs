@@ -63,6 +63,8 @@ export function buildReport(
                 pcl: null,
                 start_time: null,
                 end_time: null,
+                start_uid: null,
+                stop_uid: null,
                 extensions: [],
                 wo_id_str: String(segment.woId),
                 part_no: "",
@@ -208,6 +210,7 @@ export function buildReport(
         totalAllotedQty,
         totalOkQty,
         totalRejectQty,
+        totalLogs: logs.length,
         woBreakdowns,
         operatorSummaries,
     };
@@ -219,7 +222,7 @@ export function buildReport(
     let sNoCounter = 1;
     allRows.forEach((row) => {
         if (row.isComputed || row.isWoHeader || row.isWoSummary || row.isPauseBanner) {
-            row.sNo = undefined; // empty S.No
+            delete row.sNo; // empty S.No
         } else {
             row.sNo = sNoCounter++;
         }
@@ -239,7 +242,7 @@ function parseDurationToSec(durationText?: string): number {
     let total = 0;
     const minMatch = durationText.match(/(\d+)\s*min/);
     const secMatch = durationText.match(/(\d+)\s*sec/);
-    if (minMatch) total += parseInt(minMatch[1], 10) * 60;
-    if (secMatch) total += parseInt(secMatch[1], 10);
+    if (minMatch?.[1]) total += parseInt(minMatch[1], 10) * 60;
+    if (secMatch?.[1]) total += parseInt(secMatch[1], 10);
     return total;
 }

@@ -1,11 +1,32 @@
 export function formatDuration(sec: number | null): string {
     if (sec === null || sec === undefined) return "-";
 
-    const m = Math.floor(sec / 60);
-    const s = Math.round(sec % 60);
+    // Handle negative values by using absolute value, but typically durations are positive.
+    // Variances might pass negative, but we usually format absolute value for variance text.
+    const absSec = Math.abs(sec);
 
-    if (m > 0) return `${m} min ${s} sec`;
-    return `${s} sec`;
+    if (absSec < 60) {
+        return `${Math.round(absSec)}s`;
+    }
+
+    if (absSec < 3600) {
+        const m = Math.floor(absSec / 60);
+        const s = Math.round(absSec % 60);
+        return `${m}m ${s}s`;
+    }
+
+    if (absSec < 86400) {
+        const h = Math.floor(absSec / 3600);
+        const m = Math.floor((absSec % 3600) / 60);
+        const s = Math.round(absSec % 60);
+        return `${h}h ${m}m ${s}s`;
+    }
+
+    // Days
+    const d = Math.floor(absSec / 86400);
+    const h = Math.floor((absSec % 86400) / 3600);
+    const m = Math.floor((absSec % 3600) / 60);
+    return `${d}d ${h}h ${m}m`;
 }
 
 export function formatLogTime(date: Date): string {
@@ -23,9 +44,10 @@ export function formatLogTime(date: Date): string {
 export function formatVariance(diffSec: number | null): { text: string; color: "red" | "green" | "neutral" } {
     if (diffSec === null) return { text: "-", color: "neutral" };
 
-    const abs = Math.round(Math.abs(diffSec));
+    const abs = Math.abs(diffSec);
+    const formatted = formatDuration(abs);
 
-    if (diffSec > 0) return { text: `${abs} sec excess`, color: "red" };
-    if (diffSec < 0) return { text: `${abs} sec lower`, color: "green" };
-    return { text: "0 sec", color: "neutral" };
+    if (diffSec > 0) return { text: `${formatted} excess`, color: "red" };
+    if (diffSec < 0) return { text: `${formatted} lower`, color: "green" };
+    return { text: "0s", color: "neutral" };
 }

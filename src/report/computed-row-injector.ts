@@ -1,4 +1,5 @@
 import { DeviceLogEntry, JobBlock, PausePeriod, ReportRow, SpindleCycle, WoDetails, WoSegment } from "./report-types.js";
+import { formatDuration, formatVariance } from "./format-utils.js";
 
 const MAX_LOADING_GAP_SEC = 900;    // 15 min
 const SHIFT_BREAK_SEC = 120 * 60;   // 120 min
@@ -52,7 +53,7 @@ export function injectComputedRows(
                 woIdStr: woDetails.wo_id_str,
                 partNo: woDetails.part_no,
                 operatorName: operator,
-                pclText: fmtDur(pclSec),
+                pclText: formatDuration(pclSec),
                 setting: woDetails.setting,
                 deviceId: woDetails.device_id,
                 startComment: woDetails.start_comment,
@@ -62,7 +63,6 @@ export function injectComputedRows(
 
     // 2. WO_START row
     if (woStartLog) {
-        let summaryText = woDetails?.start_comment || "";
         rows.push({
             rowId: `log-${woStartLog.log_id}`,
             logId: woStartLog.log_id,
@@ -72,8 +72,12 @@ export function injectComputedRows(
             originalLog: woStartLog,
             timestamp: new Date(woStartLog.log_time).getTime(),
             operatorName: operator,
-            summary: summaryText,
-            woSpecs: woSpecs
+            woSpecs: woSpecs,
+            startRowData: {
+                partNo: woDetails?.part_no || "",
+                allotted: woDetails?.alloted_qty || 0,
+                comment: woDetails?.start_comment || ""
+            }
         });
     }
 
@@ -90,9 +94,9 @@ export function injectComputedRows(
                 rowId: `computed-ideal-${segment.woId}`,
                 logTime: new Date(refTime + 1000),
                 action: "",
-                durationText: fmtDur(idealSec),
+                durationText: formatDuration(idealSec),
                 label: "Ideal Time",
-                summary: fmtDur(idealSec),
+                summary: formatDuration(idealSec),
                 jobType: segment.jobType,
                 timestamp: refTime + 1000,
                 isComputed: true,
@@ -122,8 +126,8 @@ export function injectComputedRows(
                 jobBlockLabel: block.label,
                 originalLog: cycle.onLog,
                 timestamp: new Date(cycle.onLog.log_time).getTime(),
-                summary: isFinal && block.pcl ? fmtVariance(block.varianceSec) : undefined,
-                varianceColor: isFinal && block.pcl ? varColor(block.varianceSec) : undefined,
+                summary: isFinal && block.pcl ? formatVariance(block.varianceSec).text : undefined,
+                varianceColor: isFinal && block.pcl ? formatVariance(block.varianceSec).color : undefined,
                 operatorName: operator,
                 woSpecs,
             });
@@ -135,13 +139,13 @@ export function injectComputedRows(
                 logTime: new Date(cycle.offLog.log_time),
                 action: "SPINDLE_OFF",
                 label: block.label,
-                durationText: fmtDur(cycle.durationSec),
+                durationText: formatDuration(cycle.durationSec),
                 jobType: segment.jobType,
                 isJobBlock: true,
                 jobBlockLabel: block.label,
                 originalLog: cycle.offLog,
                 timestamp: new Date(cycle.offLog.log_time).getTime(),
-                summary: isFinal && block.pcl ? fmtDur(block.totalSec) : undefined,
+                summary: isFinal && block.pcl ? formatDuration(block.totalSec) : undefined,
                 operatorName: operator,
                 woSpecs,
             });
@@ -212,7 +216,7 @@ export function injectComputedRows(
         if (log.action === "WO_PAUSE") {
             const pair = segment.pausePeriods.find((p: PausePeriod) => p.pauseLog.log_id === log.log_id);
             if (pair) {
-                durationText = fmtDur(pair.durationSec);
+                durationText = formatDuration(pair.durationSec);
                 const isShiftBreak = pair.durationSec > SHIFT_BREAK_SEC;
 
                 // Find reason from WO extensions
@@ -230,7 +234,7 @@ export function injectComputedRows(
                     woSpecs,
                     pauseBannerData: {
                         reason: reason || (isShiftBreak ? "Shift Break / Machine Off" : "Paused"),
-                        durationText: fmtDur(pair.durationSec),
+                        durationText: formatDuration(pair.durationSec),
                         isShiftBreak,
                     },
                 });
@@ -263,8 +267,12 @@ export function injectComputedRows(
             originalLog: woStopLog,
             timestamp: new Date(woStopLog.log_time).getTime(),
             operatorName: operator,
-            summary: woDetails?.stop_comment,
             woSpecs,
+            stopRowData: {
+                ok: woDetails?.ok_qty || 0,
+                reject: woDetails?.reject_qty || 0,
+                reason: woDetails?.stop_comment || ""
+            }
         });
     }
 
@@ -298,16 +306,17 @@ export function injectComputedRows(
                 endTime: woDetails.end_time
                     ? new Date(woDetails.end_time).toLocaleString("en-GB")
                     : "",
-                totalDuration: fmtDur(woDetails.duration),
+                totalDuration: formatDuration(woDetails.duration),
                 totalJobs: jobBlocks.length,
                 totalCycles: segment.spindleCycles.length,
-                totalCuttingTime: fmtDur(totalCuttingSec),
+                totalCuttingTime: formatDuration(totalCuttingSec),
                 allotedQty: woDetails.alloted_qty,
                 okQty: woDetails.ok_qty,
                 rejectQty: woDetails.reject_qty,
-                totalPauseTime: totalPauseSec > 0 ? fmtDur(totalPauseSec) : "0 sec",
+                totalPauseTime: totalPauseSec > 0 ? formatDuration(totalPauseSec) : "0 sec",
                 pauseReasons,
                 stopComment: woDetails.stop_comment,
+                startComment: woDetails.start_comment,
             },
         });
     }
@@ -338,9 +347,9 @@ function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jo
         rowId: `computed-${idSuffix}`,
         logTime: new Date(ts),
         action: "",
-        durationText: fmtDur(sec),
+        durationText: formatDuration(sec),
         label,
-        summary: fmtDur(sec),
+        summary: formatDuration(sec),
         jobType,
         timestamp: ts,
         isComputed: true,
@@ -350,24 +359,5 @@ function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jo
     };
 }
 
-function fmtDur(sec: number): string {
-    const m = Math.floor(sec / 60);
-    const s = Math.round(sec % 60);
-    if (m > 0) return `${m} min ${s} sec`;
-    return `${s} sec`;
-}
+// Helper functions removed in favor of format-utils.ts
 
-function fmtVariance(diff: number | null): string | undefined {
-    if (diff === null) return undefined;
-    const abs = Math.round(Math.abs(diff));
-    if (diff > 0) return `${abs} sec excess`;
-    if (diff < 0) return `${abs} sec lower`;
-    return `0 sec`;
-}
-
-function varColor(diff: number | null): "red" | "green" | "neutral" | undefined {
-    if (diff === null) return undefined;
-    if (diff > 0) return "red";
-    if (diff < 0) return "green";
-    return "neutral";
-}

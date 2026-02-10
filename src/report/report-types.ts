@@ -2,6 +2,7 @@
 
 export interface DeviceLogEntry {
     log_id: number;       // API returns log_id, not id
+    id?: number;          // Compatibility for payloads that send id instead of log_id
     log_time: string;     // ISO string from API
     action: "SPINDLE_ON" | "SPINDLE_OFF" | "WO_START" | "WO_STOP" | "WO_PAUSE" | "WO_RESUME" | string;
     wo_id: number;
@@ -54,6 +55,8 @@ export interface WoDetails {
     pcl: number | null;
     start_time: string | null;
     end_time: string | null;
+    start_uid: number | null;
+    stop_uid: number | null;
     extensions: WoExtension[];
     // Additional fields for UI
     wo_id_str: string;      // e.g. "2893"
@@ -130,6 +133,7 @@ export interface WoSummaryData {
     totalPauseTime: string;
     pauseReasons: string[];
     stopComment: string;
+    startComment: string;
 }
 
 export interface PauseBannerData {
@@ -164,6 +168,18 @@ export interface ReportRow {
     woSummaryData?: WoSummaryData;
     isPauseBanner?: boolean;
     pauseBannerData?: PauseBannerData;
+
+    // Rich data for WO_START / WO_STOP rows
+    startRowData?: {
+        partNo: string;
+        allotted: number;
+        comment: string;
+    };
+    stopRowData?: {
+        ok: number;
+        reject: number;
+        reason: string;
+    };
 
     // Job grouping key for visual boxing
     jobBlockLabel?: string | undefined;     // "JOB - 01" etc
@@ -231,6 +247,7 @@ export interface ReportStats {
     totalAllotedQty: number;
     totalOkQty: number;
     totalRejectQty: number;
+    totalLogs: number;
 
     // Detailed breakdowns
     woBreakdowns: WoBreakdown[];

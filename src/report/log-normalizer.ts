@@ -12,9 +12,18 @@ export function normalizeLogs(logs: DeviceLogEntry[]): DeviceLogEntry[] {
     const uniqueLogs: DeviceLogEntry[] = [];
 
     for (const log of logs) {
-        if (!seenIds.has(log.log_id)) {
-            seenIds.add(log.log_id);
-            uniqueLogs.push(log);
+        const rawId = (log as { log_id?: unknown; id?: unknown }).log_id ?? (log as { id?: unknown }).id;
+        const canonicalId = typeof rawId === "number" ? rawId : Number(rawId);
+        if (!Number.isFinite(canonicalId)) {
+            continue;
+        }
+
+        if (!seenIds.has(canonicalId)) {
+            seenIds.add(canonicalId);
+            uniqueLogs.push({
+                ...log,
+                log_id: canonicalId,
+            });
         }
     }
 

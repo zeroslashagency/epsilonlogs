@@ -15,6 +15,6 @@ rows.forEach((row, i) => {
     console.log(`  Actual Duration: ${row.workOrder.durationSec}s`);
     console.log(`  Target Duration: ${row.workOrder.targetDurationSec}s`);
   } else if (row.rowKind === "EXTENSION") {
-    console.log(`  Comment: ${row.extension?.comment}`);
+    console.log(`  Comment: ${row.extension?.extensionComment}`);
   }
 });

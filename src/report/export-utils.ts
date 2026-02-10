@@ -1,20 +1,930 @@
-import * as XLSX from 'xlsx';
+import type { Font, Row, Workbook, Worksheet } from 'exceljs';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { ReportRow } from './report-types.js';
+import { formatDuration } from './format-utils.js';
+import { ReportConfig, ReportRow, ReportStats, WoDetails } from './report-types.js';
+
+export const LOG_SHEET_HEADERS = [
+    'S.No',
+    'Log Time',
+    'Action',
+    'Job Type',
+    'Device Name',
+    'WO Name',
+    'UID ID',
+    'UID Name',
+    'Setting',
+    'Part No',
+    'Alloted Qty',
+    'Start Comment',
+    'PCL',
+] as const;
+
+export const LOG_STYLE_COLORS = {
+    headerBg: 'FF1E293B',
+    headerText: 'FFFFFFFF',
+    woHeaderBg: 'FF2563EB',
+    woSummaryBg: 'FF1E293B',
+    pauseShiftBg: 'FFFEE2E2',
+    pauseBg: 'FFFEF3C7',
+    jobBlockBg: 'FFC7FFD8',
+    woActionBg: 'FFEFF6FF',
+    pauseActionBg: 'FFFEF3C7',
+    unknownBg: 'FFF1F5F9',
+    defaultBg: 'FFFFFFFF',
+    darkText: 'FF0F172A',
+    mutedText: 'FF64748B',
+    whiteText: 'FFFFFFFF',
+    gridLine: 'FFE2E8F0',
+    sectionHeader: 'FFE2E8F0',
+    tableHeader: 'FFE0E7FF',
+    rejectText: 'FFDC2626',
+} as const;
+
+export interface LogsSheetRow {
+    'S.No': number | '';
+    'Log Time': string;
+    Action: string;
+    'Job Type': string;
+    'Device Name': string;
+    'WO Name': string;
+    'UID ID': number | '';
+    'UID Name': string;
+    Setting: string;
+    'Part No': string;
+    'Alloted Qty': number | '';
+    'Start Comment': string;
+    PCL: string;
+}
+
+export interface ExcelExportInput {
+    rows: ReportRow[];
+    stats: ReportStats;
+    woDetailsMap: Map<number, WoDetails>;
+    deviceNameMap: Map<number, string>;
+    filename?: string;
+    reportConfig?: Pick<ReportConfig, 'deviceId' | 'startDate' | 'endDate'>;
+}
+
+const LOG_SHEET_COLUMN_WIDTHS = [
+    8,   // S.No
+    22,  // Log Time
+    16,  // Action
+    14,  // Job Type
+    18,  // Device Name
+    14,  // WO Name
+    10,  // UID ID
+    18,  // UID Name
+    18,  // Setting
+    16,  // Part No
+    12,  // Alloted Qty
+    40,  // Start Comment
+    10,  // PCL
+] as const;
+
+interface ExportRowVisual {
+    fillColor: string;
+    fontColor: string;
+    bold?: boolean;
+    italic?: boolean;
+}
+
+type ExcelJSImport = typeof import('exceljs');
+type WorkbookCtor = new () => Workbook;
+
+let excelJsModulePromise: Promise<ExcelJSImport> | null = null;
+let excelJsMinModulePromise: Promise<unknown> | null = null;
+
+function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isOptimizeDepError(error: unknown): boolean {
+    const text = error instanceof Error ? error.message : String(error);
+    const lower = text.toLowerCase();
+    return lower.includes('outdated optimize dep') || lower.includes('failed to fetch dynamically imported module');
+}
+
+async function loadExcelJsModule(): Promise<ExcelJSImport> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+            return await import('exceljs');
+        } catch (error) {
+            lastError = error;
+            try {
+                return await import('exceljs/dist/exceljs.min.js') as unknown as ExcelJSImport;
+            } catch (fallbackError) {
+                lastError = fallbackError;
+            }
+            if (attempt < 2) {
+                await delay(250);
+            }
+        }
+    }
+
+    if (isOptimizeDepError(lastError)) {
+        throw new Error('Excel exporter dependency cache is stale. Restart Vite (`npm run dev -- --force`) and retry export.');
+    }
+
+    throw new Error('Unable to load Excel export dependency.');
+}
+
+async function getExcelJsModule(): Promise<ExcelJSImport> {
+    if (!excelJsModulePromise) {
+        excelJsModulePromise = loadExcelJsModule().catch((error) => {
+            excelJsModulePromise = null;
+            throw error;
+        });
+    }
+
+    return excelJsModulePromise;
+}
+
+async function getExcelJsMinModule(): Promise<unknown> {
+    if (!excelJsMinModulePromise) {
+        excelJsMinModulePromise = import('exceljs/dist/exceljs.min.js').catch((error) => {
+            excelJsMinModulePromise = null;
+            throw error;
+        });
+    }
+    return excelJsMinModulePromise;
+}
+
+function isWorkbookInstance(value: unknown): value is Workbook {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as { addWorksheet?: unknown; getWorksheet?: unknown };
+    return typeof candidate.addWorksheet === 'function'
+        && typeof candidate.getWorksheet === 'function';
+}
+
+function asWorkbookCtor(value: unknown): WorkbookCtor | null {
+    if (typeof value !== 'function') return null;
+    try {
+        const instance = new (value as new () => unknown)();
+        if (isWorkbookInstance(instance)) {
+            return value as WorkbookCtor;
+        }
+    } catch {
+        return null;
+    }
+    return null;
+}
+
+function getGlobalExcelJs(): unknown {
+    return (globalThis as unknown as { ExcelJS?: unknown }).ExcelJS;
+}
+
+function describeExcelModuleShape(moduleLike: unknown): string {
+    try {
+        if (!moduleLike || (typeof moduleLike !== 'object' && typeof moduleLike !== 'function')) {
+            return `shape:${typeof moduleLike}`;
+        }
+        const keys = Object.keys(moduleLike as Record<string, unknown>).slice(0, 20);
+        return `keys:${keys.join(',')}`;
+    } catch {
+        return 'shape:uninspectable';
+    }
+}
+
+function findWorkbookCtorDeep(root: unknown): WorkbookCtor | null {
+    const visited = new Set<unknown>();
+    const queue: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+    const maxDepth = 5;
+    const maxNodes = 250;
+    let seenNodes = 0;
+
+    while (queue.length > 0 && seenNodes < maxNodes) {
+        const current = queue.shift();
+        if (!current) break;
+        seenNodes += 1;
+
+        const { value, depth } = current;
+        const directCtor = asWorkbookCtor(value);
+        if (directCtor) {
+            return directCtor;
+        }
+
+        if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
+            continue;
+        }
+
+        if (visited.has(value)) {
+            continue;
+        }
+        visited.add(value);
+
+        if (depth >= maxDepth) {
+            continue;
+        }
+
+        let keys: string[] = [];
+        try {
+            keys = Object.keys(value as Record<string, unknown>);
+        } catch {
+            continue;
+        }
+
+        for (const key of keys) {
+            let next: unknown;
+            try {
+                next = (value as Record<string, unknown>)[key];
+            } catch {
+                continue;
+            }
+            if (key === 'Workbook') {
+                const workbookCtor = asWorkbookCtor(next);
+                if (workbookCtor) {
+                    return workbookCtor;
+                }
+            }
+            queue.push({ value: next, depth: depth + 1 });
+        }
+    }
+
+    return null;
+}
+
+function resolveWorkbookCtor(excelJs: ExcelJSImport): WorkbookCtor {
+    const fromNamed = asWorkbookCtor((excelJs as unknown as { Workbook?: unknown }).Workbook);
+    if (fromNamed) {
+        return fromNamed;
+    }
+
+    const fromDefault = asWorkbookCtor((excelJs as unknown as { default?: { Workbook?: unknown } }).default?.Workbook);
+    if (fromDefault) {
+        return fromDefault;
+    }
+
+    const fromModuleExports = asWorkbookCtor((excelJs as unknown as { 'module.exports'?: { Workbook?: unknown } })['module.exports']?.Workbook);
+    if (fromModuleExports) {
+        return fromModuleExports;
+    }
+
+    const fromGlobal = asWorkbookCtor((getGlobalExcelJs() as { Workbook?: unknown } | undefined)?.Workbook);
+    if (fromGlobal) {
+        return fromGlobal;
+    }
+
+    const deepResolved = findWorkbookCtorDeep(excelJs);
+    if (deepResolved) {
+        return deepResolved;
+    }
+
+    const globalShape = describeExcelModuleShape(getGlobalExcelJs());
+    const moduleShape = describeExcelModuleShape(excelJs);
+    throw new Error(`Unable to resolve ExcelJS Workbook constructor. module(${moduleShape}) global(${globalShape})`);
+}
+
+async function getWorkbookCtor(): Promise<WorkbookCtor> {
+    await getExcelJsMinModule().catch(() => {
+        // continue with other module paths if min bundle import fails
+    });
+
+    try {
+        const globalCtor = asWorkbookCtor((getGlobalExcelJs() as { Workbook?: unknown } | undefined)?.Workbook);
+        if (globalCtor) {
+            return globalCtor;
+        }
+
+        const excelJs = await getExcelJsModule();
+        return resolveWorkbookCtor(excelJs);
+    } catch (primaryError) {
+        try {
+            const fallbackModule = await import('exceljs/dist/exceljs.min.js') as unknown as ExcelJSImport;
+            return resolveWorkbookCtor(fallbackModule);
+        } catch {
+            throw primaryError;
+        }
+    }
+}
+
+function toInt(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string' && value.trim() !== '') {
+        const num = Number(value);
+        return Number.isFinite(num) ? num : null;
+    }
+    return null;
+}
+
+function toStringValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    return '';
+}
+
+function formatLogDateTime(date: Date): string {
+    const dd = String(date.getDate()).padStart(2, '0');
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const yyyy = date.getFullYear();
+    const hh = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    const sec = String(date.getSeconds()).padStart(2, '0');
+    return `${dd}-${mm}-${yyyy} ${hh}:${min}:${sec}`;
+}
+
+function resolveWoDetails(row: ReportRow, woDetailsMap: Map<number, WoDetails>): WoDetails | undefined {
+    const candidates: Array<number | null> = [
+        toInt(row.originalLog?.wo_id),
+        toInt(row.woHeaderData?.woIdStr),
+        toInt(row.woSummaryData?.woIdStr),
+        toInt(row.woSpecs?.woId),
+    ];
+
+    for (const woId of candidates) {
+        if (typeof woId === 'number') {
+            const details = woDetailsMap.get(woId);
+            if (details) {
+                return details;
+            }
+        }
+    }
+
+    const woNameCandidates = [
+        toStringValue(row.originalLog?.wo_name),
+        row.woHeaderData?.woIdStr || '',
+        row.woSummaryData?.woIdStr || '',
+        row.woSpecs?.woId || '',
+    ].filter((value) => value !== '');
+
+    if (woNameCandidates.length > 0) {
+        for (const details of woDetailsMap.values()) {
+            if (woNameCandidates.includes(details.wo_id_str)) {
+                return details;
+            }
+        }
+    }
+
+    return undefined;
+}
+
+function resolveExportAction(row: ReportRow): string {
+    if (typeof row.action === 'string' && row.action.trim()) {
+        return row.action;
+    }
+    if (row.isWoHeader) return 'WO_HEADER';
+    if (row.isWoSummary) return 'WO_SUMMARY';
+    if (row.isPauseBanner) return 'PAUSE_BANNER';
+    return '';
+}
+
+function resolveDeviceId(row: ReportRow, woDetails?: WoDetails): number | null {
+    const candidates: Array<number | null> = [
+        toInt(row.originalLog?.device_id),
+        toInt(row.woHeaderData?.deviceId),
+        toInt(row.woSummaryData?.deviceId),
+        toInt(woDetails?.device_id),
+    ];
+
+    for (const id of candidates) {
+        if (typeof id === 'number') {
+            return id;
+        }
+    }
+
+    return null;
+}
+
+function resolveDeviceName(row: ReportRow, woDetails: WoDetails | undefined, deviceNameMap: Map<number, string>): string {
+    const deviceId = resolveDeviceId(row, woDetails);
+    if (deviceId === null) return '';
+    return deviceNameMap.get(deviceId) || `Device ${deviceId}`;
+}
+
+function resolveWoName(row: ReportRow, woDetails?: WoDetails): string {
+    return toStringValue(row.originalLog?.wo_name) || woDetails?.wo_id_str || row.woSpecs?.woId || '';
+}
+
+function resolveUidId(row: ReportRow, woDetails?: WoDetails): number | null {
+    const candidates: Array<number | null> = [
+        toInt(row.originalLog?.uid),
+        toInt(woDetails?.start_uid),
+    ];
+
+    for (const uid of candidates) {
+        if (typeof uid === 'number') {
+            return uid;
+        }
+    }
+
+    return null;
+}
+
+function resolveUidName(row: ReportRow, uidId: number | null, woDetails?: WoDetails): string {
+    if (uidId !== null && woDetails) {
+        if (typeof woDetails.start_uid === 'number' && uidId === woDetails.start_uid && woDetails.start_name) {
+            return woDetails.start_name;
+        }
+        if (typeof woDetails.stop_uid === 'number' && uidId === woDetails.stop_uid && woDetails.stop_name) {
+            return woDetails.stop_name;
+        }
+    }
+
+    return toStringValue(row.originalLog?.start_name) || row.operatorName || '';
+}
+
+function resolveSetting(row: ReportRow, woDetails?: WoDetails): string {
+    return toStringValue(row.originalLog?.setting) || woDetails?.setting || '';
+}
+
+function resolvePartNo(row: ReportRow, woDetails?: WoDetails): string {
+    return toStringValue(row.originalLog?.part_no) || woDetails?.part_no || '';
+}
+
+function resolveAllotedQty(row: ReportRow, woDetails?: WoDetails): number | '' {
+    const fromLog = toInt(row.originalLog?.alloted_qty);
+    if (fromLog !== null) return fromLog;
+
+    const fromWo = toInt(woDetails?.alloted_qty);
+    if (fromWo !== null) return fromWo;
+
+    const fromSpecs = toInt(row.woSpecs?.allotted);
+    return fromSpecs !== null ? fromSpecs : '';
+}
+
+function resolveStartComment(row: ReportRow, woDetails?: WoDetails): string {
+    return toStringValue(row.originalLog?.start_comment)
+        || woDetails?.start_comment
+        || row.woHeaderData?.startComment
+        || '';
+}
+
+function resolvePcl(row: ReportRow, woDetails?: WoDetails): string {
+    const raw = row.originalLog?.pcl;
+    if (raw !== undefined && raw !== null && String(raw).trim() !== '') {
+        return String(raw);
+    }
+    if (woDetails?.pcl !== null && woDetails?.pcl !== undefined) {
+        return String(woDetails.pcl);
+    }
+    return '';
+}
+
+export function mapReportRowToLogsSheetRow(
+    row: ReportRow,
+    woDetailsMap: Map<number, WoDetails>,
+    deviceNameMap: Map<number, string>
+): LogsSheetRow {
+    const woDetails = resolveWoDetails(row, woDetailsMap);
+    const uidId = resolveUidId(row, woDetails);
+
+    return {
+        'S.No': row.sNo ?? '',
+        'Log Time': formatLogDateTime(row.logTime),
+        Action: resolveExportAction(row),
+        'Job Type': row.jobType || '',
+        'Device Name': resolveDeviceName(row, woDetails, deviceNameMap),
+        'WO Name': resolveWoName(row, woDetails),
+        'UID ID': uidId ?? '',
+        'UID Name': resolveUidName(row, uidId, woDetails),
+        Setting: resolveSetting(row, woDetails),
+        'Part No': resolvePartNo(row, woDetails),
+        'Alloted Qty': resolveAllotedQty(row, woDetails),
+        'Start Comment': resolveStartComment(row, woDetails),
+        PCL: resolvePcl(row, woDetails),
+    };
+}
+
+export function buildLogsSheetRows(
+    rows: ReportRow[],
+    woDetailsMap: Map<number, WoDetails>,
+    deviceNameMap: Map<number, string>
+): LogsSheetRow[] {
+    return rows.map((row) => mapReportRowToLogsSheetRow(row, woDetailsMap, deviceNameMap));
+}
+
+function resolveRowVisual(row: ReportRow): ExportRowVisual {
+    if (row.isWoHeader) {
+        return {
+            fillColor: LOG_STYLE_COLORS.woHeaderBg,
+            fontColor: LOG_STYLE_COLORS.whiteText,
+            bold: true,
+        };
+    }
+
+    if (row.isWoSummary) {
+        return {
+            fillColor: LOG_STYLE_COLORS.woSummaryBg,
+            fontColor: LOG_STYLE_COLORS.whiteText,
+            bold: true,
+        };
+    }
+
+    if (row.isPauseBanner) {
+        return {
+            fillColor: row.pauseBannerData?.isShiftBreak ? LOG_STYLE_COLORS.pauseShiftBg : LOG_STYLE_COLORS.pauseBg,
+            fontColor: LOG_STYLE_COLORS.darkText,
+            bold: true,
+        };
+    }
+
+    if (row.jobBlockLabel) {
+        return {
+            fillColor: LOG_STYLE_COLORS.jobBlockBg,
+            fontColor: LOG_STYLE_COLORS.darkText,
+        };
+    }
+
+    if (row.action === 'WO_START' || row.action === 'WO_STOP') {
+        return {
+            fillColor: LOG_STYLE_COLORS.woActionBg,
+            fontColor: LOG_STYLE_COLORS.darkText,
+            bold: true,
+        };
+    }
+
+    if (row.action === 'WO_PAUSE' || row.action === 'WO_RESUME') {
+        return {
+            fillColor: LOG_STYLE_COLORS.pauseActionBg,
+            fontColor: LOG_STYLE_COLORS.darkText,
+        };
+    }
+
+    if (row.isComputed) {
+        return {
+            fillColor: LOG_STYLE_COLORS.defaultBg,
+            fontColor: LOG_STYLE_COLORS.mutedText,
+            italic: true,
+        };
+    }
+
+    if (row.jobType === 'Unknown') {
+        return {
+            fillColor: LOG_STYLE_COLORS.unknownBg,
+            fontColor: LOG_STYLE_COLORS.darkText,
+        };
+    }
+
+    return {
+        fillColor: LOG_STYLE_COLORS.defaultBg,
+        fontColor: LOG_STYLE_COLORS.darkText,
+    };
+}
+
+function toExcelColumnName(columnNumber: number): string {
+    let dividend = columnNumber;
+    let columnName = '';
+
+    while (dividend > 0) {
+        const modulo = (dividend - 1) % 26;
+        columnName = String.fromCharCode(65 + modulo) + columnName;
+        dividend = Math.floor((dividend - modulo) / 26);
+    }
+
+    return columnName;
+}
+
+function applyDataRowStyle(row: Row, visual: ExportRowVisual): void {
+    for (let col = 1; col <= LOG_SHEET_HEADERS.length; col += 1) {
+        const cell = row.getCell(col);
+        cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: visual.fillColor },
+        };
+        const font: Partial<Font> = {
+            color: { argb: visual.fontColor },
+        };
+        if (visual.bold) font.bold = true;
+        if (visual.italic) font.italic = true;
+        cell.font = font;
+        cell.border = {
+            top: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            left: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            bottom: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            right: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+        };
+
+        const horizontal = col === 1 || col === 7
+            ? 'center'
+            : col === 11 || col === 13
+                ? 'right'
+                : 'left';
+
+        cell.alignment = {
+            vertical: 'top',
+            horizontal,
+            wrapText: col === 12,
+        };
+    }
+}
+
+function addLogsSheet(workbook: Workbook, input: ExcelExportInput): void {
+    const worksheet = workbook.addWorksheet('Logs');
+    worksheet.columns = LOG_SHEET_HEADERS.map((header, index) => ({
+        header,
+        key: header,
+        width: LOG_SHEET_COLUMN_WIDTHS[index] ?? 14,
+    }));
+
+    worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+    worksheet.autoFilter = {
+        from: 'A1',
+        to: `${toExcelColumnName(LOG_SHEET_HEADERS.length)}1`,
+    };
+
+    const headerRow = worksheet.getRow(1);
+    for (let col = 1; col <= LOG_SHEET_HEADERS.length; col += 1) {
+        const cell = headerRow.getCell(col);
+        cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: LOG_STYLE_COLORS.headerBg },
+        };
+        cell.font = {
+            color: { argb: LOG_STYLE_COLORS.headerText },
+            bold: true,
+        };
+        cell.alignment = {
+            vertical: 'middle',
+            horizontal: 'center',
+        };
+        cell.border = {
+            top: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            left: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            bottom: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            right: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+        };
+    }
+    headerRow.height = 24;
+
+    const logRows = buildLogsSheetRows(input.rows, input.woDetailsMap, input.deviceNameMap);
+
+    input.rows.forEach((rawRow, index) => {
+        const outputRow = logRows[index];
+        const worksheetRow = worksheet.addRow(outputRow);
+        applyDataRowStyle(worksheetRow, resolveRowVisual(rawRow));
+    });
+}
+
+function styleSectionHeader(worksheet: Worksheet, rowNumber: number, title: string): void {
+    worksheet.getCell(`A${rowNumber}`).value = title;
+    worksheet.mergeCells(`A${rowNumber}:D${rowNumber}`);
+    const cell = worksheet.getCell(`A${rowNumber}`);
+    cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: LOG_STYLE_COLORS.sectionHeader },
+    };
+    cell.font = {
+        bold: true,
+        color: { argb: LOG_STYLE_COLORS.darkText },
+    };
+    cell.alignment = {
+        horizontal: 'left',
+        vertical: 'middle',
+    };
+}
+
+function styleTableHeader(row: Row): void {
+    row.eachCell((cell) => {
+        cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: LOG_STYLE_COLORS.tableHeader },
+        };
+        cell.font = { bold: true, color: { argb: LOG_STYLE_COLORS.darkText } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.border = {
+            top: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            left: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            bottom: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            right: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+        };
+    });
+}
+
+function styleTableBodyRow(row: Row, rightAlignedColumns: number[]): void {
+    row.eachCell((cell, colNumber) => {
+        cell.border = {
+            top: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            left: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            bottom: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            right: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+        };
+        cell.alignment = {
+            vertical: 'middle',
+            horizontal: rightAlignedColumns.includes(colNumber) ? 'right' : 'left',
+        };
+    });
+}
+
+function resolveDevicesLabel(input: ExcelExportInput): string {
+    if (typeof input.reportConfig?.deviceId === 'number') {
+        const deviceName = input.deviceNameMap.get(input.reportConfig.deviceId);
+        return deviceName
+            ? `${deviceName} (${input.reportConfig.deviceId})`
+            : `Device ${input.reportConfig.deviceId}`;
+    }
+
+    const deviceLabels = new Set<string>();
+    for (const row of input.rows) {
+        const woDetails = resolveWoDetails(row, input.woDetailsMap);
+        const deviceName = resolveDeviceName(row, woDetails, input.deviceNameMap);
+        if (deviceName) {
+            deviceLabels.add(deviceName);
+        }
+    }
+
+    return Array.from(deviceLabels).join(', ');
+}
+
+function addAnalysisSheet(workbook: Workbook, input: ExcelExportInput): void {
+    const worksheet = workbook.addWorksheet('Analysis');
+    worksheet.columns = [
+        { width: 30 },
+        { width: 30 },
+        { width: 18 },
+        { width: 18 },
+        { width: 18 },
+        { width: 18 },
+        { width: 18 },
+        { width: 18 },
+        { width: 18 },
+        { width: 18 },
+        { width: 18 },
+        { width: 18 },
+        { width: 14 },
+        { width: 14 },
+    ];
+
+    worksheet.getCell('A1').value = 'Device Logs Analysis';
+    worksheet.getCell('A1').font = { size: 16, bold: true, color: { argb: LOG_STYLE_COLORS.darkText } };
+
+    worksheet.getCell('A3').value = 'Generated On';
+    worksheet.getCell('B3').value = formatLogDateTime(new Date());
+    worksheet.getCell('A4').value = 'Device(s)';
+    worksheet.getCell('B4').value = resolveDevicesLabel(input);
+    worksheet.getCell('A5').value = 'Date Range';
+    const startText = input.reportConfig?.startDate || '';
+    const endText = input.reportConfig?.endDate || '';
+    worksheet.getCell('B5').value = startText && endText ? `${startText} to ${endText}` : '';
+
+    ['A3', 'A4', 'A5'].forEach((address) => {
+        worksheet.getCell(address).font = { bold: true };
+    });
+
+    let rowCursor = 7;
+    styleSectionHeader(worksheet, rowCursor, 'KPI Summary');
+    rowCursor += 1;
+
+    const kpiRows: Array<[string, string | number]> = [
+        ['Total Logs', input.stats.totalLogs],
+        ['Total Jobs', input.stats.totalJobs],
+        ['Total Cycles', input.stats.totalCycles],
+        ['Cutting Time', formatDuration(input.stats.totalCuttingSec)],
+        ['Pause Time', formatDuration(input.stats.totalPauseSec)],
+        ['Loading/Unloading Time', formatDuration(input.stats.totalLoadingUnloadingSec)],
+        ['Idle Time', formatDuration(input.stats.totalIdleSec)],
+        ['WO Duration', formatDuration(input.stats.totalWoDurationSec)],
+        ['Machine Utilization %', `${input.stats.machineUtilization}%`],
+        ['Alloted Qty', input.stats.totalAllotedQty],
+        ['OK Qty', input.stats.totalOkQty],
+        ['Reject Qty', input.stats.totalRejectQty],
+    ];
+
+    for (const [label, value] of kpiRows) {
+        const row = worksheet.getRow(rowCursor);
+        row.getCell(1).value = label;
+        row.getCell(2).value = value;
+        row.getCell(1).font = { bold: true };
+        styleTableBodyRow(row, [2]);
+        if (label === 'Reject Qty' && typeof value === 'number' && value > 0) {
+            row.getCell(2).font = { color: { argb: LOG_STYLE_COLORS.rejectText }, bold: true };
+        }
+        rowCursor += 1;
+    }
+
+    rowCursor += 1;
+    styleSectionHeader(worksheet, rowCursor, 'WO Breakdown');
+    rowCursor += 1;
+
+    const woHeaders = [
+        'WO ID',
+        'Part No',
+        'Operator',
+        'Setting',
+        'Jobs',
+        'Cycles',
+        'Cutting',
+        'Pause',
+        'Loading',
+        'PCL',
+        'Avg Cycle',
+        'Allot',
+        'OK',
+        'Reject',
+    ];
+
+    const woHeaderRow = worksheet.getRow(rowCursor);
+    woHeaderRow.values = woHeaders;
+    styleTableHeader(woHeaderRow);
+    rowCursor += 1;
+
+    for (const wo of input.stats.woBreakdowns) {
+        const row = worksheet.getRow(rowCursor);
+        row.values = [
+            wo.woId,
+            wo.partNo,
+            wo.operator,
+            wo.setting,
+            wo.jobs,
+            wo.cycles,
+            formatDuration(wo.cuttingSec),
+            formatDuration(wo.pauseSec),
+            formatDuration(wo.loadingSec),
+            wo.pcl !== null ? String(wo.pcl) : '',
+            formatDuration(wo.avgCycleSec),
+            wo.allotedQty,
+            wo.okQty,
+            wo.rejectQty,
+        ];
+        styleTableBodyRow(row, [5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+        if (wo.rejectQty > 0) {
+            row.getCell(14).font = { color: { argb: LOG_STYLE_COLORS.rejectText }, bold: true };
+        }
+        rowCursor += 1;
+    }
+
+    rowCursor += 1;
+    styleSectionHeader(worksheet, rowCursor, 'Operator Summary');
+    rowCursor += 1;
+
+    const operatorHeaders = [
+        'Operator',
+        'WO Count',
+        'Jobs',
+        'Cycles',
+        'Cutting',
+        'Pause',
+        'Avg Cycle',
+    ];
+
+    const operatorHeaderRow = worksheet.getRow(rowCursor);
+    operatorHeaderRow.values = operatorHeaders;
+    styleTableHeader(operatorHeaderRow);
+    rowCursor += 1;
+
+    for (const operator of input.stats.operatorSummaries) {
+        const row = worksheet.getRow(rowCursor);
+        row.values = [
+            operator.name,
+            operator.woCount,
+            operator.totalJobs,
+            operator.totalCycles,
+            formatDuration(operator.totalCuttingSec),
+            formatDuration(operator.totalPauseSec),
+            formatDuration(operator.avgCycleSec),
+        ];
+        styleTableBodyRow(row, [2, 3, 4, 5, 6, 7]);
+        rowCursor += 1;
+    }
+}
+
+export async function buildExcelWorkbook(input: ExcelExportInput): Promise<Workbook> {
+    const WorkbookClass = await getWorkbookCtor();
+    const workbook = new WorkbookClass();
+    workbook.created = new Date();
+    workbook.modified = new Date();
+
+    addLogsSheet(workbook, input);
+    addAnalysisSheet(workbook, input);
+
+    return workbook;
+}
+
+export async function exportToExcel(input: ExcelExportInput): Promise<void> {
+    const filename = input.filename || 'device_report.xlsx';
+    const workbook = await buildExcelWorkbook(input);
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    const blob = new Blob([buffer as BlobPart], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
 
 /**
- * Common formatting for Excel and PDF exports
+ * Existing PDF export kept unchanged.
  */
-function prepareExportData(rows: ReportRow[]) {
+function preparePdfExportData(rows: ReportRow[]) {
     return rows.map(row => {
-        // Format WO Specs
         let woSpecsStr = '';
         if (row.woSpecs) {
             woSpecsStr = `WO: ${row.woSpecs.woId}\nPCL: ${row.woSpecs.pclText}\nAllot: ${row.woSpecs.allotted}`;
         }
 
-        // Handle Banner Text
         let summaryText = row.summary || '';
         if (row.isWoHeader && row.woHeaderData) {
             summaryText = `🔧 WO #${row.woHeaderData.woIdStr} - Part: ${row.woHeaderData.partNo} - Op: ${row.woHeaderData.operatorName}`;
@@ -39,28 +949,10 @@ function prepareExportData(rows: ReportRow[]) {
     });
 }
 
-export function exportToExcel(rows: ReportRow[], filename: string = 'device_report.xlsx') {
-    const data = prepareExportData(rows);
-    const worksheet = XLSX.utils.json_to_sheet(data);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Report');
-
-    // Auto-size columns (rough estimate)
-    const maxWidths = data.reduce((acc: any, row) => {
-        Object.keys(row).forEach((key, i) => {
-            const val = String((row as any)[key]);
-            acc[i] = Math.max(acc[i] || 10, val.length + 2);
-        });
-        return acc;
-    }, []);
-    worksheet['!cols'] = maxWidths.map((w: number) => ({ wch: Math.min(w, 50) }));
-
-    XLSX.writeFile(workbook, filename);
-}
-
 export function exportToPDF(rows: ReportRow[], filename: string = 'device_report.pdf') {
-    const doc = new jsPDF('l', 'mm', 'a4'); // Landscape A4
-    const data = prepareExportData(rows);
+    const doc = new jsPDF('l', 'mm', 'a4');
+    const data = preparePdfExportData(rows);
+    const applyAutoTable = autoTable as unknown as (doc: jsPDF, options: Record<string, unknown>) => void;
 
     const headers = [['S.No', 'Log ID', 'Log Time', 'Action', 'Duration', 'Label', 'WO Specs', 'Summary / Notes', 'Job Type', 'Operator']];
     const body = data.map(item => [
@@ -81,29 +973,24 @@ export function exportToPDF(rows: ReportRow[], filename: string = 'device_report
     doc.setFontSize(10);
     doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 22);
 
-    autoTable(doc, {
+    applyAutoTable(doc, {
         head: headers,
-        body: body,
+        body,
         startY: 25,
         styles: { fontSize: 8, cellPadding: 2 },
-        headStyles: { fillStyle: 'F', fillColor: [30, 41, 59] }, // Slate-800
+        headStyles: { fillStyle: 'F', fillColor: [30, 41, 59] },
         columnStyles: {
-            0: { cellWidth: 10 }, // S.No
-            1: { cellWidth: 15 }, // Log ID
-            2: { cellWidth: 35 }, // Log Time
-            3: { cellWidth: 20 }, // Action
-            4: { cellWidth: 20 }, // Duration
-            5: { cellWidth: 20 }, // Label
-            6: { cellWidth: 30 }, // WO Specs
-            7: { cellWidth: 'auto' }, // Summary
-            8: { cellWidth: 20 }, // Job Type
-            9: { cellWidth: 25 }  // Operator
+            0: { cellWidth: 10 },
+            1: { cellWidth: 15 },
+            2: { cellWidth: 35 },
+            3: { cellWidth: 20 },
+            4: { cellWidth: 20 },
+            5: { cellWidth: 20 },
+            6: { cellWidth: 30 },
+            7: { cellWidth: 'auto' },
+            8: { cellWidth: 20 },
+            9: { cellWidth: 25 },
         },
-        didParseCell: (_data: any) => {
-            // Apply background colors to Job Blocks if we had that info here? 
-            // In prepareExportData we lost the 'isInBlock' flag. 
-            // We could re-check the original rows if needed.
-        }
     });
 
     doc.save(filename);
