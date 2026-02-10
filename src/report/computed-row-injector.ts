@@ -349,7 +349,7 @@ function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jo
         action: "",
         durationText: formatDuration(sec),
         label,
-        summary: formatDuration(sec),
+        summary: undefined, // Fixed: was formatDuration(sec), causing double display
         jobType,
         timestamp: ts,
         isComputed: true,

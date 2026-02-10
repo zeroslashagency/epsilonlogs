@@ -92,12 +92,12 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
 
                                             {/* Center: Metrics & Main Info */}
                                             <div className="col-span-6 flex flex-col items-center justify-center text-center">
-                                                <div className="text-[10px] font-semibold text-slate-400 mb-0.5 uppercase tracking-widest">
+                                                <div className="text-sm font-semibold text-slate-300 mb-1 uppercase tracking-widest">
                                                     WO #{s.woIdStr} Summary
                                                 </div>
 
                                                 {/* Line 1: Times */}
-                                                <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                                                <div className="flex items-center gap-3 text-sm text-slate-400">
                                                     <span>Dur: <b className="text-slate-200 font-mono">{s.totalDuration}</b></span>
                                                     <span className="text-slate-600">|</span>
                                                     <span>Cut: <b className="text-emerald-300 font-mono">{s.totalCuttingTime}</b></span>
@@ -107,7 +107,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                                 </div>
 
                                                 {/* Line 2: Counts */}
-                                                <div className="flex items-center gap-3 text-[11px] text-slate-400 bg-slate-900/50 px-3 py-0.5 rounded-full border border-slate-700/50 mt-0.5">
+                                                <div className="flex items-center gap-3 text-sm text-slate-400 bg-slate-900/50 px-3 py-1 rounded-full border border-slate-700/50 mt-1">
                                                     <span>Jobs: <b className="text-slate-200">{s.totalJobs}</b></span>
                                                     <span className="text-slate-600">/</span>
                                                     <span>Cyc: <b className="text-slate-200">{s.totalCycles}</b></span>
@@ -152,10 +152,18 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                             p.isShiftBreak ? "text-rose-700" : "text-amber-800"
                                         )}>
                                             <span>{p.isShiftBreak ? '🔴' : '⚠️'}</span>
-                                            <span>{p.isShiftBreak ? 'SHIFT BREAK' : 'WO_PAUSE'}</span>
-                                            <span className="text-xs font-normal">Reason:</span>
-                                            <span className="underline">{p.reason}</span>
-                                            <span className="ml-auto font-mono">{p.durationText}</span>
+                                            <div className="flex flex-col">
+                                                <span>{p.isShiftBreak ? 'SHIFT BREAK' : 'WO_PAUSE'}</span>
+                                                <div className="flex flex-col mt-0.5 ml-0.5">
+                                                    <div className="flex gap-1 text-xs font-normal text-slate-700">
+                                                        <span className="opacity-70 uppercase tracking-wider text-[10px] font-bold">Reason:</span>
+                                                        <span className="font-medium underline decoration-slate-400/50 underline-offset-2">{p.reason}</span>
+                                                    </div>
+                                                    <div className="mt-1 pt-0.5 border-t border-slate-300/50 w-fit">
+                                                        <span className="font-mono font-bold text-slate-900 text-xs">⏲ {p.durationText}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     </td>
                                 </tr>
@@ -211,20 +219,18 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                 </td>
 
                                 {/* Duration / Part / OK */}
-                                <td className="px-3 py-2 font-mono text-slate-700 align-top">
+                                <td className="px-3 py-2 font-mono text-slate-700 align-top min-w-[100px]">
                                     {row.startRowData ? (
-                                        <div className="flex flex-col space-y-0.5 text-xs">
-                                            <span className="text-slate-500 font-medium">Part:</span>
-                                            <span className="font-bold text-slate-800">{row.startRowData.partNo}</span>
+                                        <div className="flex flex-col space-y-0.5">
+                                            <span className="text-slate-500 font-medium uppercase text-[9px] tracking-wider">Part No</span>
+                                            <span className="font-bold text-slate-800 text-[11px] leading-tight">{row.startRowData.partNo}</span>
                                         </div>
                                     ) : row.stopRowData ? (
-                                        <div className="flex flex-col space-y-0.5 text-xs">
-                                            <span className="text-emerald-600 font-medium">OK Qty:</span>
-                                            <span className="font-bold text-slate-800">{row.stopRowData.ok}</span>
+                                        <div className="flex flex-col space-y-0.5">
+                                            <span className="text-emerald-600 font-medium uppercase text-[9px] tracking-wider">OK Qty</span>
+                                            <span className="font-bold text-slate-800 text-[11px] leading-tight">{row.stopRowData.ok}</span>
                                         </div>
-                                    ) : (
-                                        row.durationText || ''
-                                    )}
+                                    ) : null}
                                 </td>
 
                                 {/* Label / Allot / Reject */}
@@ -249,25 +255,40 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                 </td>
 
                                 {/* Summary / Comments */}
-                                <td className="px-3 py-2 align-top">
+                                <td className="px-3 py-2 align-top text-sm">
                                     {row.startRowData ? (
-                                        <div className="flex flex-col space-y-0.5 text-xs">
-                                            <span className="text-slate-500 font-medium">Start Comment:</span>
-                                            <span className="italic text-slate-700">{row.startRowData.comment || '-'}</span>
+                                        <div className="flex flex-col space-y-1">
+                                            <div className="flex flex-col space-y-0.5">
+                                                <span className="text-slate-500 font-medium uppercase text-[9px] tracking-wider">Comment</span>
+                                                <span className="italic text-slate-700">"{row.startRowData.comment || '—'}"</span>
+                                            </div>
+                                            {row.durationText && (
+                                                <span className="font-mono font-bold text-slate-900 border-t border-slate-200 mt-1 pt-0.5 w-fit">⏲ {row.durationText}</span>
+                                            )}
                                         </div>
                                     ) : row.stopRowData ? (
-                                        <div className="flex flex-col space-y-0.5 text-xs">
-                                            <span className="text-slate-500 font-medium">Stop Reason:</span>
-                                            <span className="font-medium text-slate-800">{row.stopRowData.reason || '-'}</span>
+                                        <div className="flex flex-col space-y-1">
+                                            <div className="flex flex-col space-y-0.5">
+                                                <span className="text-slate-500 font-medium uppercase text-[9px] tracking-wider">Stop Reason</span>
+                                                <span className="font-medium text-slate-800">{row.stopRowData.reason || '—'}</span>
+                                            </div>
+                                            {row.durationText && (
+                                                <span className="font-mono font-bold text-slate-900 border-t border-slate-200 mt-1 pt-0.5 w-fit">⏲ {row.durationText}</span>
+                                            )}
                                         </div>
                                     ) : (
-                                        <span className={cn(
-                                            "font-medium",
-                                            row.varianceColor === 'red' ? "text-rose-600" :
-                                                row.varianceColor === 'green' ? "text-emerald-600" : "text-slate-600"
-                                        )}>
-                                            {row.summary || ''}
-                                        </span>
+                                        <div className="flex flex-col gap-0.5">
+                                            {row.durationText && <span className="font-mono font-bold text-slate-900">{row.durationText}</span>}
+                                            {row.summary && (
+                                                <span className={cn(
+                                                    "font-medium",
+                                                    row.varianceColor === 'red' ? "text-rose-600" :
+                                                        row.varianceColor === 'green' ? "text-emerald-600" : "text-slate-600"
+                                                )}>
+                                                    {row.summary}
+                                                </span>
+                                            )}
+                                        </div>
                                     )}
                                 </td>
 

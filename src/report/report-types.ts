@@ -71,6 +71,8 @@ export interface WoDetails {
     reject_qty: number;
     device_id: number;
     duration: number;       // total WO duration in seconds
+    job_type?: number;      // 1=Production, 2=Setting, etc.
+    target_duration?: number; // Used for Job Type 2 instead of PCL
 }
 
 // --- Internal Processing Types ---

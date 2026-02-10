@@ -119,6 +119,8 @@ export async function fetchWoDetails(
             reject_qty: wo.reject_qty || 0,
             device_id: wo.device_id || 0,
             duration: wo.duration || 0,
+            job_type: wo.job_type,
+            target_duration: wo.target_duration,
         };
 
     } catch (error) {

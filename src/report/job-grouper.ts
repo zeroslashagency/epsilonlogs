@@ -18,9 +18,17 @@ export function groupCyclesIntoJobs(
     _options: GroupingOptions = {}
 ): JobBlock[] {
     const pcl = woDetails.pcl;
+
+    // Logic: If Job Type 2 (Setting), use target_duration if available. 
+    // Otherwise use PCL.
+    let targetPcl: number | null = woDetails.pcl;
+    if (woDetails.job_type === 2 && (woDetails.target_duration || 0) > 0) {
+        targetPcl = woDetails.target_duration || null;
+    }
+
     const blocks: JobBlock[] = [];
 
-    if (!pcl || pcl <= 0) {
+    if (!targetPcl || targetPcl <= 0) {
         let i = 1;
         for (const cycle of cycles) {
             blocks.push({
@@ -59,7 +67,7 @@ export function groupCyclesIntoJobs(
             sumSec += cycle.durationSec;
             idx++;
 
-            const err = Math.abs(sumSec - pcl);
+            const err = Math.abs(sumSec - targetPcl!);
             if (err < bestErr) {
                 bestErr = err;
                 bestEndIdx = currentCycles.length - 1;
@@ -67,7 +75,7 @@ export function groupCyclesIntoJobs(
             }
 
             // Condition A: crossed or hit target
-            if (sumSec >= pcl) break;
+            if (sumSec >= targetPcl!) break;
             // Condition B: safety cap
             if (currentCycles.length >= MAX_CYCLES_PER_JOB) break;
         }
@@ -78,8 +86,8 @@ export function groupCyclesIntoJobs(
                 label: `JOB - ${String(jobCounter++).padStart(2, '0')}`,
                 cycles: jobCycles,
                 totalSec: bestSum,
-                varianceSec: bestSum - pcl,
-                pcl,
+                varianceSec: bestSum - targetPcl!,
+                pcl: targetPcl,
             });
 
             // Return unused cycles for re-processing

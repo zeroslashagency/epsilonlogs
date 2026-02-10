@@ -8,6 +8,8 @@ export const LOG_SHEET_HEADERS = [
     'S.No',
     'Log Time',
     'Action',
+    'Job Tag',
+    'Summary / Notes',
     'Job Type',
     'Device Name',
     'WO Name',
@@ -28,8 +30,11 @@ export const LOG_STYLE_COLORS = {
     pauseShiftBg: 'FFFEE2E2',
     pauseBg: 'FFFEF3C7',
     jobBlockBg: 'FFC7FFD8',
+    jobTagChipBg: 'FF059669',
+    groupBorder: 'FF34D399',
     woActionBg: 'FFEFF6FF',
     pauseActionBg: 'FFFEF3C7',
+    computedBg: 'FFF8FAFC',
     unknownBg: 'FFF1F5F9',
     defaultBg: 'FFFFFFFF',
     darkText: 'FF0F172A',
@@ -45,6 +50,8 @@ export interface LogsSheetRow {
     'S.No': number | '';
     'Log Time': string;
     Action: string;
+    'Job Tag': string;
+    'Summary / Notes': string;
     'Job Type': string;
     'Device Name': string;
     'WO Name': string;
@@ -70,6 +77,8 @@ const LOG_SHEET_COLUMN_WIDTHS = [
     8,   // S.No
     22,  // Log Time
     16,  // Action
+    14,  // Job Tag
+    44,  // Summary / Notes
     14,  // Job Type
     18,  // Device Name
     14,  // WO Name
@@ -88,6 +97,31 @@ interface ExportRowVisual {
     bold?: boolean;
     italic?: boolean;
 }
+
+interface JobGroupMeta {
+    groupKey: string | null;
+    isInGroup: boolean;
+    isFirstInGroup: boolean;
+    isLastInGroup: boolean;
+}
+
+const LOG_COLUMN_INDEX = {
+    serialNo: 1,
+    logTime: 2,
+    action: 3,
+    jobTag: 4,
+    summaryNotes: 5,
+    jobType: 6,
+    deviceName: 7,
+    woName: 8,
+    uidId: 9,
+    uidName: 10,
+    setting: 11,
+    partNo: 12,
+    allotedQty: 13,
+    startComment: 14,
+    pcl: 15,
+} as const;
 
 type ExcelJSImport = typeof import('exceljs');
 type WorkbookCtor = new () => Workbook;
@@ -371,6 +405,52 @@ function resolveExportAction(row: ReportRow): string {
     return '';
 }
 
+function isLoadingSeparatorLabel(label: string | undefined): boolean {
+    if (!label) return false;
+    return label.trim().toLowerCase() === 'loading /unloading time';
+}
+
+function isJobGroupRow(row: ReportRow): boolean {
+    if (!row.jobBlockLabel) return false;
+    if (row.isWoHeader || row.isWoSummary || row.isPauseBanner) return false;
+    if (row.isComputed) {
+        return isLoadingSeparatorLabel(row.label);
+    }
+    return true;
+}
+
+function buildJobGroupMeta(rows: ReportRow[]): JobGroupMeta[] {
+    const groupKeys = rows.map((row) => (isJobGroupRow(row) ? row.jobBlockLabel || null : null));
+
+    return rows.map((_, index) => {
+        const key = groupKeys[index];
+        if (!key) {
+            return {
+                groupKey: null,
+                isInGroup: false,
+                isFirstInGroup: false,
+                isLastInGroup: false,
+            };
+        }
+
+        const prevKey = index > 0 ? groupKeys[index - 1] : null;
+        const nextKey = index < rows.length - 1 ? groupKeys[index + 1] : null;
+
+        return {
+            groupKey: key,
+            isInGroup: true,
+            isFirstInGroup: prevKey !== key,
+            isLastInGroup: nextKey !== key,
+        };
+    });
+}
+
+function resolveJobTag(row: ReportRow): string {
+    if (!isJobGroupRow(row)) return '';
+    if (row.isComputed && isLoadingSeparatorLabel(row.label)) return '';
+    return row.jobBlockLabel || '';
+}
+
 function resolveDeviceId(row: ReportRow, woDetails?: WoDetails): number | null {
     const candidates: Array<number | null> = [
         toInt(row.originalLog?.device_id),
@@ -463,6 +543,124 @@ function resolvePcl(row: ReportRow, woDetails?: WoDetails): string {
     return '';
 }
 
+function formatSummaryDateTime(date: Date): string {
+    const dd = String(date.getDate()).padStart(2, '0');
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const yyyy = date.getFullYear();
+    const hh = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    const sec = String(date.getSeconds()).padStart(2, '0');
+    return `${dd}/${mm}/${yyyy}, ${hh}:${min}:${sec}`;
+}
+
+function quoteOrDash(value: string): string {
+    return value ? `"${value}"` : '"—"';
+}
+
+function resolvePclTextForSummary(row: ReportRow, woDetails?: WoDetails): string {
+    if (row.woSpecs?.pclText) return row.woSpecs.pclText;
+    if (woDetails?.pcl !== null && woDetails?.pcl !== undefined) return formatDuration(woDetails.pcl);
+    return '—';
+}
+
+function resolveSummaryNotes(row: ReportRow, woDetails?: WoDetails): string {
+    const action = resolveExportAction(row);
+    const pclText = resolvePclTextForSummary(row, woDetails);
+    const lines: string[] = [];
+
+    if (row.isWoSummary && row.woSummaryData) {
+        const summary = row.woSummaryData;
+        const pauseReasonsText = summary.pauseReasons.length > 0 ? summary.pauseReasons.join(', ') : '—';
+        lines.push('1) WO INFO');
+        lines.push(`Part: ${summary.partNo} | Operator: ${summary.operatorName}`);
+        lines.push(`Device: ${summary.deviceId} | Setting: ${summary.setting}`);
+        lines.push(`WO: ${summary.woIdStr} | PCL: ${pclText}`);
+        lines.push('');
+        lines.push('2) TIME/KPI');
+        lines.push(`Start: ${summary.startTime || '—'}`);
+        lines.push(`End: ${summary.endTime || '—'}`);
+        lines.push(`Duration: ${summary.totalDuration}`);
+        lines.push(`Jobs: ${summary.totalJobs} | Cycles: ${summary.totalCycles}`);
+        lines.push(`Cutting: ${summary.totalCuttingTime} | Pause: ${summary.totalPauseTime}`);
+        lines.push('');
+        lines.push('3) OUTPUT + COMMENTS');
+        lines.push(`Allot: ${summary.allotedQty} | OK: ${summary.okQty} | Reject: ${summary.rejectQty}`);
+        lines.push(`Start Comment: ${quoteOrDash(summary.startComment || '')}`);
+        lines.push(`Stop Comment: ${quoteOrDash(summary.stopComment || '')}`);
+        lines.push(`Pause Reasons: ${pauseReasonsText}`);
+        return lines.join('\n');
+    }
+
+    if (row.isPauseBanner && row.pauseBannerData) {
+        lines.push(`Pause: ${row.pauseBannerData.durationText || '—'}`);
+        lines.push(`Reason: ${row.pauseBannerData.reason || 'Paused'}`);
+        return lines.join('\n');
+    }
+
+    if (isLoadingSeparatorLabel(row.label)) {
+        lines.push(`Gap Time: ${row.durationText || row.summary || '—'}`);
+        lines.push('Type: Loading/Unloading');
+        return lines.join('\n');
+    }
+
+    switch (action) {
+        case 'SPINDLE_OFF': {
+            lines.push(`Actual Cycle: ${row.durationText || '—'}`);
+            lines.push(`Target PCL: ${pclText}`);
+            return lines.join('\n');
+        }
+        case 'SPINDLE_ON': {
+            lines.push(`Variance: ${row.summary || '—'}`);
+            lines.push(`Ref PCL: ${pclText}`);
+            return lines.join('\n');
+        }
+        case 'WO_START': {
+            const startComment = row.startRowData?.comment
+                || toStringValue(row.originalLog?.start_comment)
+                || woDetails?.start_comment
+                || '';
+            lines.push(`Start: ${formatSummaryDateTime(row.logTime)}`);
+            lines.push(`Comment: ${quoteOrDash(startComment)}`);
+            return lines.join('\n');
+        }
+        case 'WO_PAUSE': {
+            const pauseReason = toStringValue(row.originalLog?.stop_comment)
+                || toStringValue(row.originalLog?.start_comment)
+                || 'Paused';
+            lines.push(`Pause: ${row.durationText || '—'}`);
+            lines.push(`Reason: ${pauseReason}`);
+            return lines.join('\n');
+        }
+        case 'WO_RESUME': {
+            const resumeNote = row.summary
+                || toStringValue(row.originalLog?.stop_comment)
+                || toStringValue(row.originalLog?.start_comment)
+                || '—';
+            lines.push(`Resume After: ${row.durationText || '—'}`);
+            lines.push(`Note: ${resumeNote}`);
+            return lines.join('\n');
+        }
+        case 'WO_STOP': {
+            const stopReason = row.stopRowData?.reason
+                || toStringValue(row.originalLog?.stop_comment)
+                || woDetails?.stop_comment
+                || '—';
+            lines.push(`Stop: ${formatSummaryDateTime(row.logTime)}`);
+            lines.push(`Reason: ${stopReason}`);
+            return lines.join('\n');
+        }
+        default: {
+            if (row.summary) {
+                lines.push(row.summary);
+            }
+            if (row.durationText) {
+                lines.push(`Duration: ${row.durationText}`);
+            }
+            return lines.join('\n');
+        }
+    }
+}
+
 export function mapReportRowToLogsSheetRow(
     row: ReportRow,
     woDetailsMap: Map<number, WoDetails>,
@@ -475,6 +673,8 @@ export function mapReportRowToLogsSheetRow(
         'S.No': row.sNo ?? '',
         'Log Time': formatLogDateTime(row.logTime),
         Action: resolveExportAction(row),
+        'Job Tag': resolveJobTag(row),
+        'Summary / Notes': resolveSummaryNotes(row, woDetails),
         'Job Type': row.jobType || '',
         'Device Name': resolveDeviceName(row, woDetails, deviceNameMap),
         'WO Name': resolveWoName(row, woDetails),
@@ -496,7 +696,7 @@ export function buildLogsSheetRows(
     return rows.map((row) => mapReportRowToLogsSheetRow(row, woDetailsMap, deviceNameMap));
 }
 
-function resolveRowVisual(row: ReportRow): ExportRowVisual {
+function resolveRowVisual(row: ReportRow, groupMeta: JobGroupMeta): ExportRowVisual {
     if (row.isWoHeader) {
         return {
             fillColor: LOG_STYLE_COLORS.woHeaderBg,
@@ -521,7 +721,7 @@ function resolveRowVisual(row: ReportRow): ExportRowVisual {
         };
     }
 
-    if (row.jobBlockLabel) {
+    if (groupMeta.isInGroup) {
         return {
             fillColor: LOG_STYLE_COLORS.jobBlockBg,
             fontColor: LOG_STYLE_COLORS.darkText,
@@ -545,7 +745,7 @@ function resolveRowVisual(row: ReportRow): ExportRowVisual {
 
     if (row.isComputed) {
         return {
-            fillColor: LOG_STYLE_COLORS.defaultBg,
+            fillColor: LOG_STYLE_COLORS.computedBg,
             fontColor: LOG_STYLE_COLORS.mutedText,
             italic: true,
         };
@@ -577,7 +777,7 @@ function toExcelColumnName(columnNumber: number): string {
     return columnName;
 }
 
-function applyDataRowStyle(row: Row, visual: ExportRowVisual): void {
+function applyDataRowStyle(row: Row, visual: ExportRowVisual, groupMeta: JobGroupMeta): void {
     for (let col = 1; col <= LOG_SHEET_HEADERS.length; col += 1) {
         const cell = row.getCell(col);
         cell.fill = {
@@ -585,29 +785,65 @@ function applyDataRowStyle(row: Row, visual: ExportRowVisual): void {
             pattern: 'solid',
             fgColor: { argb: visual.fillColor },
         };
+
         const font: Partial<Font> = {
             color: { argb: visual.fontColor },
         };
         if (visual.bold) font.bold = true;
         if (visual.italic) font.italic = true;
         cell.font = font;
+
+        const thinBorder = { style: 'thin' as const, color: { argb: LOG_STYLE_COLORS.gridLine } };
+        const thickGroupBorder = { style: 'thick' as const, color: { argb: LOG_STYLE_COLORS.groupBorder } };
+        const topBorder = groupMeta.isInGroup && groupMeta.isFirstInGroup ? thickGroupBorder : thinBorder;
+        const leftBorder = groupMeta.isInGroup && col === LOG_COLUMN_INDEX.serialNo ? thickGroupBorder : thinBorder;
+        const bottomBorder = groupMeta.isInGroup && groupMeta.isLastInGroup ? thickGroupBorder : thinBorder;
+
         cell.border = {
-            top: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
-            left: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
-            bottom: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            top: topBorder,
+            left: leftBorder,
+            bottom: bottomBorder,
             right: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
         };
 
-        const horizontal = col === 1 || col === 7
+        const horizontal = col === LOG_COLUMN_INDEX.serialNo
+            || col === LOG_COLUMN_INDEX.jobTag
+            || col === LOG_COLUMN_INDEX.uidId
             ? 'center'
-            : col === 11 || col === 13
+            : col === LOG_COLUMN_INDEX.allotedQty || col === LOG_COLUMN_INDEX.pcl
                 ? 'right'
                 : 'left';
 
         cell.alignment = {
             vertical: 'top',
             horizontal,
-            wrapText: col === 12,
+            wrapText: col === LOG_COLUMN_INDEX.summaryNotes || col === LOG_COLUMN_INDEX.startComment,
+        };
+    }
+
+    if (groupMeta.isInGroup) {
+        const jobTagCell = row.getCell(LOG_COLUMN_INDEX.jobTag);
+        const jobTagText = String(jobTagCell.value ?? '').trim();
+        if (jobTagText && groupMeta.isFirstInGroup) {
+            jobTagCell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: LOG_STYLE_COLORS.jobTagChipBg },
+            };
+            jobTagCell.font = {
+                color: { argb: LOG_STYLE_COLORS.whiteText },
+                bold: true,
+            };
+        } else if (jobTagText) {
+            jobTagCell.font = {
+                color: { argb: LOG_STYLE_COLORS.darkText },
+                bold: true,
+            };
+        }
+        jobTagCell.alignment = {
+            vertical: 'middle',
+            horizontal: 'center',
+            wrapText: false,
         };
     }
 }
@@ -652,11 +888,26 @@ function addLogsSheet(workbook: Workbook, input: ExcelExportInput): void {
     headerRow.height = 24;
 
     const logRows = buildLogsSheetRows(input.rows, input.woDetailsMap, input.deviceNameMap);
+    const groupMetaByIndex = buildJobGroupMeta(input.rows);
 
     input.rows.forEach((rawRow, index) => {
         const outputRow = logRows[index];
+        if (!outputRow) {
+            return;
+        }
         const worksheetRow = worksheet.addRow(outputRow);
-        applyDataRowStyle(worksheetRow, resolveRowVisual(rawRow));
+        const groupMeta = groupMetaByIndex[index] ?? {
+            groupKey: null,
+            isInGroup: false,
+            isFirstInGroup: false,
+            isLastInGroup: false,
+        };
+        applyDataRowStyle(worksheetRow, resolveRowVisual(rawRow, groupMeta), groupMeta);
+        const notes = String(outputRow['Summary / Notes'] ?? '');
+        const lineCount = notes ? notes.split('\n').length : 1;
+        if (lineCount > 1) {
+            worksheetRow.height = Math.max(22, lineCount * 13);
+        }
     });
 }
 
