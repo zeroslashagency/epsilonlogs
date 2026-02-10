@@ -36,7 +36,7 @@ function Dashboard() {
     const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTER_STATE);
     const [stats, setStats] = useState({ total: 0, good: 0, warning: 0, bad: 0, unknown: 0 });
 
-    const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwibmFtZSI6IlByYWJodSIsInJvbGUiOjB9.VjxuoF-L0BzHHHGcqgQtjUBG-fwKz0DrCvyfhLEvDbQ';
+    const token = import.meta.env.VITE_API_TOKEN;
 
     const fetchData = async () => {
         setLoading(true);
@@ -46,7 +46,7 @@ function Dashboard() {
             const allRows: ClassifiedRow[] = [];
 
             for (const id of ids) {
-                const response = await fetch(`https://app.epsilonengg.in/api/v2/wo/${id}`, {
+                const response = await fetch(`/api/v2/wo/${id}`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 const resJson: WoApiResponse = await response.json();
