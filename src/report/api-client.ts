@@ -1,6 +1,6 @@
 import { DeviceLogApiResponse, DeviceLogEntry, ReportConfig, WoDetails } from "./report-types";
 
-const API_BASE_URL = "https://app.epsilonengg.in/api/v2";
+const API_BASE_URL = "/api/v2";
 
 /**
  * Fetches ALL pages of device logs for the given config.

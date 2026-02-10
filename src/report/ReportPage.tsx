@@ -7,7 +7,7 @@ import { fetchDeviceLogs, fetchAllWoDetails, formatDateForApi } from './api-clie
 import { buildReport } from './report-builder';
 import { extractWoIds } from './log-normalizer';
 
-const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwibmFtZSI6IlByYWJodSIsInJvbGUiOjB9.VjxuoF-L0BzHHHGcqgQtjUBG-fwKz0DrCvyfhLEvDbQ';
+const TOKEN = import.meta.env.VITE_API_TOKEN;
 
 export default function ReportPage() {
     const [config, setConfig] = useState<ReportConfig>({

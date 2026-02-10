@@ -1,0 +1,8 @@
+{
+    "rewrites": [
+        {
+            "source": "/api/v2/:path*",
+            "destination": "https://app.epsilonengg.in/api/v2/:path*"
+        }
+    ]
+}
