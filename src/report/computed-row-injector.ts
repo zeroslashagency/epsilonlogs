@@ -1,4 +1,4 @@
-import { JobBlock, ReportRow, WoDetails, WoSegment } from "./report-types";
+import { DeviceLogEntry, JobBlock, PausePeriod, ReportRow, SpindleCycle, WoDetails, WoSegment } from "./report-types.js";
 
 const MAX_LOADING_GAP_SEC = 900;    // 15 min
 const SHIFT_BREAK_SEC = 120 * 60;   // 120 min
@@ -21,8 +21,21 @@ export function injectComputedRows(
     const rows: ReportRow[] = [];
     const operator = woDetails?.start_name || "";
 
-    const woStartLog = segment.logs.find(l => l.action === "WO_START");
-    const woStopLog = segment.logs.find(l => l.action === "WO_STOP");
+    const woStartLog = segment.logs.find((l: DeviceLogEntry) => l.action === "WO_START");
+    const woStopLog = segment.logs.find((l: DeviceLogEntry) => l.action === "WO_STOP");
+
+    // Pre-calculate woSpecs for all rows in this segment
+    let woSpecs: { woId: string; pclText: string; allotted: number } | undefined = undefined;
+    if (woDetails) {
+        const pclSec = woDetails.pcl || 0;
+        const pclMinutes = Math.floor(pclSec / 60);
+        const pclSeconds = Math.round(pclSec % 60);
+        woSpecs = {
+            woId: woDetails.wo_id_str,
+            pclText: `${pclMinutes} min ${pclSeconds} sec`,
+            allotted: woDetails.alloted_qty
+        };
+    }
 
     // 1. WO Header banner (at WO_START)
     if (woStartLog && woDetails) {
@@ -34,6 +47,7 @@ export function injectComputedRows(
             timestamp: new Date(woStartLog.log_time).getTime() - 1,
             isWoHeader: true,
             operatorName: operator,
+            woSpecs,
             woHeaderData: {
                 woIdStr: woDetails.wo_id_str,
                 partNo: woDetails.part_no,
@@ -49,14 +63,6 @@ export function injectComputedRows(
     // 2. WO_START row
     if (woStartLog) {
         let summaryText = woDetails?.start_comment || "";
-        if (woDetails) {
-            const pclSec = woDetails.pcl || 0;
-            const pclMinutes = Math.floor(pclSec / 60);
-            const pclSeconds = Math.round(pclSec % 60);
-            const extraInfo = `WO: ${woDetails.wo_id_str} | PCL: ${pclMinutes} min ${pclSeconds} sec | Allotted: ${woDetails.alloted_qty}`;
-            summaryText = summaryText ? `${summaryText} | ${extraInfo}` : extraInfo;
-        }
-
         rows.push({
             rowId: `log-${woStartLog.id}`,
             logId: woStartLog.id,
@@ -67,6 +73,7 @@ export function injectComputedRows(
             timestamp: new Date(woStartLog.log_time).getTime(),
             operatorName: operator,
             summary: summaryText,
+            woSpecs: woSpecs
         });
     }
 
@@ -90,6 +97,7 @@ export function injectComputedRows(
                 timestamp: refTime + 1000,
                 isComputed: true,
                 operatorName: operator,
+                woSpecs,
             });
         }
     }
@@ -117,6 +125,7 @@ export function injectComputedRows(
                 summary: isFinal && block.pcl ? fmtVariance(block.varianceSec) : undefined,
                 varianceColor: isFinal && block.pcl ? varColor(block.varianceSec) : undefined,
                 operatorName: operator,
+                woSpecs,
             });
 
             // SPINDLE_OFF — total on final cycle
@@ -134,6 +143,7 @@ export function injectComputedRows(
                 timestamp: new Date(cycle.offLog.log_time).getTime(),
                 summary: isFinal && block.pcl ? fmtDur(block.totalSec) : undefined,
                 operatorName: operator,
+                woSpecs,
             });
 
             // Loading/Unloading gap
@@ -146,14 +156,14 @@ export function injectComputedRows(
                 const nextOnTs = new Date(nextCycle.onLog.log_time).getTime();
                 const gapSec = (nextOnTs - offTs) / 1000;
 
-                const intervening = segment.logs.filter(l => {
+                const intervening = segment.logs.filter((l: DeviceLogEntry) => {
                     const ts = new Date(l.log_time).getTime();
                     return ts > offTs && ts < nextOnTs &&
                         ["WO_PAUSE", "WO_RESUME", "WO_STOP", "WO_START"].includes(l.action);
                 });
 
-                const hasPause = intervening.some(l => l.action === "WO_PAUSE");
-                const hasStop = intervening.some(l => l.action === "WO_STOP");
+                const hasPause = intervening.some((l: DeviceLogEntry) => l.action === "WO_PAUSE");
+                const hasStop = intervening.some((l: DeviceLogEntry) => l.action === "WO_STOP");
 
                 // Determine effective block label for gap rows:
                 // If next cycle is in SAME block, include gap in that block.
@@ -166,32 +176,32 @@ export function injectComputedRows(
                 if (hasStop) {
                     // skip
                 } else if (hasPause) {
-                    const pauseEvt = intervening.find(l => l.action === "WO_PAUSE");
-                    const resumeEvt = intervening.find(l => l.action === "WO_RESUME");
+                    const pauseEvt = intervening.find((l: DeviceLogEntry) => l.action === "WO_PAUSE");
+                    const resumeEvt = intervening.find((l: DeviceLogEntry) => l.action === "WO_RESUME");
                     if (pauseEvt) {
                         const preSec = (new Date(pauseEvt.log_time).getTime() - offTs) / 1000;
                         if (preSec > 0 && preSec <= MAX_LOADING_GAP_SEC) {
-                            rows.push(makeGapRow(`pre-${cycle.offLog.id}`, offTs + 500, preSec, "Loading /Unloading Time", segment.jobType, operator, gapLabel));
+                            rows.push(makeGapRow(`pre-${cycle.offLog.id}`, offTs + 500, preSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel));
                         }
                     }
                     if (resumeEvt) {
                         const postSec = (nextOnTs - new Date(resumeEvt.log_time).getTime()) / 1000;
                         if (postSec > 0 && postSec <= MAX_LOADING_GAP_SEC) {
-                            rows.push(makeGapRow(`post-${resumeEvt.id}`, new Date(resumeEvt.log_time).getTime() + 500, postSec, "Loading /Unloading Time", segment.jobType, operator, gapLabel)); // Should this extend block? Only if next is same.
+                            rows.push(makeGapRow(`post-${resumeEvt.id}`, new Date(resumeEvt.log_time).getTime() + 500, postSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel)); // Should this extend block? Only if next is same.
                         }
                     }
                 } else if (gapSec > 0 && gapSec <= MAX_LOADING_GAP_SEC) {
                     // This is the standard intra-job loading time. Give it the block label.
-                    rows.push(makeGapRow(`load-${cycle.offLog.id}`, offTs + 500, gapSec, "Loading /Unloading Time", segment.jobType, operator, gapLabel));
+                    rows.push(makeGapRow(`load-${cycle.offLog.id}`, offTs + 500, gapSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel));
                 } else if (gapSec > MAX_LOADING_GAP_SEC) {
-                    rows.push(makeGapRow(`idle-${cycle.offLog.id}`, offTs + 500, gapSec, "Idle/Break Time", segment.jobType, operator, undefined)); // Break breaks the block
+                    rows.push(makeGapRow(`idle-${cycle.offLog.id}`, offTs + 500, gapSec, "Idle/Break Time", segment.jobType, operator, woSpecs, undefined)); // Break breaks the block
                 }
             }
         }
     }
 
     // 5. Pause/Resume events + Pause Banners
-    const pauseResumeLogs = segment.logs.filter(l =>
+    const pauseResumeLogs = segment.logs.filter((l: DeviceLogEntry) =>
         l.action === "WO_PAUSE" || l.action === "WO_RESUME"
     );
 
@@ -200,7 +210,7 @@ export function injectComputedRows(
         let pauseBannerData = undefined;
 
         if (log.action === "WO_PAUSE") {
-            const pair = segment.pausePeriods.find(p => p.pauseLog.id === log.id);
+            const pair = segment.pausePeriods.find((p: PausePeriod) => p.pauseLog.id === log.id);
             if (pair) {
                 durationText = fmtDur(pair.durationSec);
                 const isShiftBreak = pair.durationSec > SHIFT_BREAK_SEC;
@@ -217,6 +227,7 @@ export function injectComputedRows(
                     isPauseBanner: true,
                     isComputed: true,
                     operatorName: operator,
+                    woSpecs,
                     pauseBannerData: {
                         reason: reason || (isShiftBreak ? "Shift Break / Machine Off" : "Paused"),
                         durationText: fmtDur(pair.durationSec),
@@ -237,6 +248,7 @@ export function injectComputedRows(
             originalLog: log,
             timestamp: new Date(log.log_time).getTime(),
             operatorName: operator,
+            woSpecs,
         });
     }
 
@@ -252,17 +264,18 @@ export function injectComputedRows(
             timestamp: new Date(woStopLog.log_time).getTime(),
             operatorName: operator,
             summary: woDetails?.stop_comment,
+            woSpecs,
         });
     }
 
     // 7. WO Summary banner (after WO_STOP)
     if (woStopLog && woDetails) {
-        const totalPauseSec = segment.pausePeriods.reduce((s, p) => s + p.durationSec, 0);
+        const totalPauseSec = segment.pausePeriods.reduce((s: number, p: PausePeriod) => s + p.durationSec, 0);
         const pauseReasons = segment.pausePeriods
-            .map(p => findPauseReason(p.pauseLog, woDetails))
+            .map((p: PausePeriod) => findPauseReason(p.pauseLog, woDetails))
             .filter(Boolean) as string[];
 
-        const totalCuttingSec = segment.spindleCycles.reduce((s, c) => s + c.durationSec, 0);
+        const totalCuttingSec = segment.spindleCycles.reduce((s: number, c: SpindleCycle) => s + c.durationSec, 0);
 
         rows.push({
             rowId: `wo-summary-${segment.woId}`,
@@ -272,6 +285,7 @@ export function injectComputedRows(
             isWoSummary: true,
             isComputed: true,
             operatorName: operator,
+            woSpecs,
             woSummaryData: {
                 woIdStr: woDetails.wo_id_str,
                 partNo: woDetails.part_no,
@@ -319,7 +333,7 @@ function findPauseReason(pauseLog: { log_time: string }, woDetails?: WoDetails):
     return best?.comment || null;
 }
 
-function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jobType: "Production" | "Unknown", operator: string, jobBlockLabel?: string): ReportRow {
+function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jobType: "Production" | "Unknown", operator: string, woSpecs?: { woId: string; pclText: string; allotted: number }, jobBlockLabel?: string): ReportRow {
     return {
         rowId: `computed-${idSuffix}`,
         logTime: new Date(ts),
@@ -331,6 +345,7 @@ function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jo
         timestamp: ts,
         isComputed: true,
         operatorName: operator,
+        woSpecs,
         jobBlockLabel,
     };
 }

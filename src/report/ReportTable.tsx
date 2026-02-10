@@ -41,6 +41,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                         <th className="px-3 py-3 font-semibold w-32">Duration</th>
                         <th className="px-3 py-3 font-semibold text-center">Label</th>
                         <th className="px-3 py-3 font-semibold">Summary / Notes</th>
+                        <th className="px-3 py-3 font-semibold w-32">WO Specs</th>
                         <th className="px-3 py-3 font-semibold w-24">Job Type</th>
                         <th className="px-3 py-3 font-semibold w-32">Operator</th>
                     </tr>
@@ -52,7 +53,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                             const h = row.woHeaderData;
                             return (
                                 <tr key={row.rowId} className="bg-blue-600 text-white">
-                                    <td colSpan={9} className="px-4 py-3">
+                                    <td colSpan={10} className="px-4 py-3">
                                         <div className="flex items-center gap-4 flex-wrap font-semibold text-sm">
                                             <span className="text-lg">🔧</span>
                                             <span className="bg-blue-500 px-2 py-0.5 rounded text-xs">WO #{h.woIdStr}</span>
@@ -73,7 +74,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                             const s = row.woSummaryData;
                             return (
                                 <tr key={row.rowId} className="bg-slate-800 text-white">
-                                    <td colSpan={9} className="px-4 py-3">
+                                    <td colSpan={10} className="px-4 py-3">
                                         <div className="text-xs font-semibold mb-1 text-slate-300">
                                             📊 WO #{s.woIdStr} Summary
                                         </div>
@@ -113,7 +114,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                 <tr key={row.rowId} className={cn(
                                     p.isShiftBreak ? "bg-rose-100" : "bg-amber-100"
                                 )}>
-                                    <td colSpan={9} className="px-4 py-2">
+                                    <td colSpan={10} className="px-4 py-2">
                                         <div className={cn(
                                             "flex items-center gap-3 font-semibold text-sm",
                                             p.isShiftBreak ? "text-rose-700" : "text-amber-800"
@@ -202,6 +203,17 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                     )}>
                                         {row.summary || ''}
                                     </span>
+                                </td>
+
+                                {/* WO Specs */}
+                                <td className="px-3 py-2 text-xs text-slate-600">
+                                    {row.woSpecs && (
+                                        <div className="flex flex-col space-y-0.5 whitespace-nowrap">
+                                            <span className="font-semibold text-blue-700">WO: {row.woSpecs.woId}</span>
+                                            <span className="text-slate-500">PCL: {row.woSpecs.pclText}</span>
+                                            <span className="text-slate-500">Allot: {row.woSpecs.allotted}</span>
+                                        </div>
+                                    )}
                                 </td>
 
                                 {/* Job Type */}

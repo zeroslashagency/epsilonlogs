@@ -123,19 +123,47 @@ export default function ReportPage() {
             </div>
 
             {stats && (
-                <div className="grid grid-cols-3 gap-4">
-                    <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl">
-                        <div className="text-sm text-emerald-600 font-medium">Total Jobs</div>
-                        <div className="text-2xl font-bold text-emerald-700">{stats.totalJobs}</div>
+                <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-lg font-semibold text-slate-800">Results Analysis</h2>
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={async () => {
+                                    const { exportToExcel } = await import('./export-utils');
+                                    exportToExcel(rows);
+                                }}
+                                className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium"
+                            >
+                                <Download className="h-4 w-4" />
+                                Export Excel
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    const { exportToPDF } = await import('./export-utils');
+                                    exportToPDF(rows);
+                                }}
+                                className="flex items-center gap-2 bg-rose-600 text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-medium"
+                            >
+                                <Download className="h-4 w-4" />
+                                Export PDF
+                            </button>
+                        </div>
                     </div>
-                    <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl">
-                        <div className="text-sm text-indigo-600 font-medium">Total Cycles</div>
-                        <div className="text-2xl font-bold text-indigo-700">{stats.totalCycles}</div>
-                    </div>
-                    <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl">
-                        <div className="text-sm text-slate-600 font-medium">Total Cutting Time</div>
-                        <div className="text-2xl font-bold text-slate-700">
-                            {Math.floor(stats.totalCuttingSec / 60)}m {Math.round(stats.totalCuttingSec % 60)}s
+
+                    <div className="grid grid-cols-3 gap-4">
+                        <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl">
+                            <div className="text-sm text-emerald-600 font-medium">Total Jobs</div>
+                            <div className="text-2xl font-bold text-emerald-700">{stats.totalJobs}</div>
+                        </div>
+                        <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl">
+                            <div className="text-sm text-indigo-600 font-medium">Total Cycles</div>
+                            <div className="text-2xl font-bold text-indigo-700">{stats.totalCycles}</div>
+                        </div>
+                        <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl">
+                            <div className="text-sm text-slate-600 font-medium">Total Cutting Time</div>
+                            <div className="text-2xl font-bold text-slate-700">
+                                {Math.floor(stats.totalCuttingSec / 60)}m {Math.round(stats.totalCuttingSec % 60)}s
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -129,16 +129,16 @@ export interface ReportRow {
     logId?: number;
     logTime: Date;
     action?: string;
-    durationText?: string;
-    label?: string;
-    summary?: string;
+    durationText?: string | undefined;
+    label?: string | undefined;
+    summary?: string | undefined;
     jobType: "Production" | "Unknown";
     operatorName?: string;
 
     // Styling hints
-    isJobBlock?: boolean;
-    varianceColor?: "red" | "green" | "neutral";
-    isComputed?: boolean;       // Ideal Time, Loading, Idle — skip S.No
+    isJobBlock?: boolean | undefined;
+    varianceColor?: "red" | "green" | "neutral" | undefined;
+    isComputed?: boolean | undefined;       // Ideal Time, Loading, Idle — skip S.No
 
     // Special row types
     isWoHeader?: boolean;
@@ -149,7 +149,12 @@ export interface ReportRow {
     pauseBannerData?: PauseBannerData;
 
     // Job grouping key for visual boxing
-    jobBlockLabel?: string;     // "JOB - 01" etc
+    jobBlockLabel?: string | undefined;     // "JOB - 01" etc
+    woSpecs?: {
+        woId: string;
+        pclText: string;
+        allotted: number;
+    } | undefined;
 
     // Metadata
     timestamp: number;
