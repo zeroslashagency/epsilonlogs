@@ -38,6 +38,19 @@ export interface WoDetails {
     start_time: string | null;
     end_time: string | null;
     extensions: WoExtension[];
+    // Additional fields for UI
+    wo_id_str: string;      // e.g. "2893"
+    part_no: string;
+    start_name: string;
+    stop_name: string;
+    start_comment: string;
+    stop_comment: string;
+    setting: string;
+    alloted_qty: number;
+    ok_qty: number;
+    reject_qty: number;
+    device_id: number;
+    duration: number;       // total WO duration in seconds
 }
 
 // --- Internal Processing Types ---
@@ -72,7 +85,41 @@ export interface JobBlock {
 
 // --- Display / Report Types ---
 
-export type ReportRowKind = "EVENT" | "COMPUTED_IDEAL" | "COMPUTED_LOADING" | "JOB_SUMMARY";
+export interface WoHeaderData {
+    woIdStr: string;
+    partNo: string;
+    operatorName: string;
+    pclText: string;
+    setting: string;
+    deviceId: number;
+    startComment: string;
+}
+
+export interface WoSummaryData {
+    woIdStr: string;
+    partNo: string;
+    operatorName: string;
+    setting: string;
+    deviceId: number;
+    startTime: string;
+    endTime: string;
+    totalDuration: string;
+    totalJobs: number;
+    totalCycles: number;
+    totalCuttingTime: string;
+    allotedQty: number;
+    okQty: number;
+    rejectQty: number;
+    totalPauseTime: string;
+    pauseReasons: string[];
+    stopComment: string;
+}
+
+export interface PauseBannerData {
+    reason: string;
+    durationText: string;
+    isShiftBreak: boolean;
+}
 
 export interface ReportRow {
     rowId: string;
@@ -86,10 +133,23 @@ export interface ReportRow {
     label?: string;
     summary?: string;
     jobType: "Production" | "Unknown";
+    operatorName?: string;
 
     // Styling hints
     isJobBlock?: boolean;
     varianceColor?: "red" | "green" | "neutral";
+    isComputed?: boolean;       // Ideal Time, Loading, Idle — skip S.No
+
+    // Special row types
+    isWoHeader?: boolean;
+    woHeaderData?: WoHeaderData;
+    isWoSummary?: boolean;
+    woSummaryData?: WoSummaryData;
+    isPauseBanner?: boolean;
+    pauseBannerData?: PauseBannerData;
+
+    // Job grouping key for visual boxing
+    jobBlockLabel?: string;     // "JOB - 01" etc
 
     // Metadata
     timestamp: number;

@@ -19,7 +19,7 @@ export function buildReport(
     const logs = normalizeLogs(rawLogs);
     console.log(`Normalized ${logs.length} logs`);
 
-    // 2. Segment by wo_id
+    // 2. Segment by WO_START..WO_STOP
     const segments = segmentLogs(logs);
     console.log(`Created ${segments.length} segments:`, segments.map(s => `WO ${s.woId} (${s.jobType}, ${s.logs.length} logs)`));
 
@@ -35,37 +35,44 @@ export function buildReport(
         if (segment.jobType === "Production") {
             // A. Pair Cycles & Pauses
             pairSpindleCycles(segment);
-            console.log(`WO ${segment.woId}: ${segment.spindleCycles.length} cycles, ${segment.pausePeriods.length} pauses`);
 
             stats.totalCycles += segment.spindleCycles.length;
             stats.totalCuttingSec += segment.spindleCycles.reduce((sum, c) => sum + c.durationSec, 0);
 
-            // B. Get WO Details (PCL)
+            // B. Get WO Details
             const details = woDetailsMap.get(segment.woId) || {
                 id: segment.woId,
                 pcl: null,
                 start_time: null,
                 end_time: null,
-                extensions: []
+                extensions: [],
+                wo_id_str: String(segment.woId),
+                part_no: "",
+                start_name: "",
+                stop_name: "",
+                setting: "",
+                alloted_qty: 0,
+                ok_qty: 0,
+                reject_qty: 0,
+                device_id: 0,
+                duration: 0,
             };
-            console.log(`WO ${segment.woId}: PCL=${details.pcl}, extensions=${details.extensions.length}`);
 
             // C. Group into Jobs
             const blocks = groupCyclesIntoJobs(segment.spindleCycles, details, {
                 toleranceSec: config.toleranceSec
             });
             stats.totalJobs += blocks.length;
-            console.log(`WO ${segment.woId}: ${blocks.length} jobs:`, blocks.map(b => `${b.label} (${Math.round(b.totalSec)}s, var=${b.varianceSec})`));
 
-            // D. Inject Computed Rows (Ideal, Loading, Job Blocks)
-            let rows = injectComputedRows(segment, blocks);
+            // D. Inject Computed Rows (pass woDetails for headers/summaries)
+            let rows = injectComputedRows(segment, blocks, details);
 
             // E. Annotate break/extension comments
             rows = annotateExtensions(rows, details);
 
             allRows.push(...rows);
         } else {
-            // Unknown / orphan logs — show as raw rows
+            // Unknown / orphan logs
             for (const log of segment.logs) {
                 allRows.push({
                     rowId: `log-${log.id}`,
@@ -75,7 +82,6 @@ export function buildReport(
                     jobType: "Unknown",
                     originalLog: log,
                     timestamp: new Date(log.log_time).getTime(),
-                    label: ""
                 });
             }
         }
@@ -84,9 +90,14 @@ export function buildReport(
     // 4. Reverse chronological sort (latest on top)
     allRows.sort((a, b) => b.timestamp - a.timestamp);
 
-    // 5. Assign S.No
-    allRows.forEach((row, i) => {
-        row.sNo = i + 1;
+    // 5. Assign S.No — skip computed/banner rows
+    let sNoCounter = 1;
+    allRows.forEach((row) => {
+        if (row.isComputed || row.isWoHeader || row.isWoSummary || row.isPauseBanner) {
+            row.sNo = undefined; // empty S.No
+        } else {
+            row.sNo = sNoCounter++;
+        }
     });
 
     console.log(`Final report: ${allRows.length} rows, ${stats.totalJobs} jobs, ${stats.totalCycles} cycles`);

@@ -94,6 +94,19 @@ export async function fetchWoDetails(
                 extension_comment: ext.extension_comment || null,
                 extension_duration: ext.extension_duration || 0,
             })),
+            // Additional fields for UI
+            wo_id_str: String(wo.wo_id || woId),
+            part_no: wo.part_no || "",
+            start_name: wo.start_name || "",
+            stop_name: wo.stop_name || "",
+            start_comment: wo.start_comment || wo.start_remarks || wo.start_reason || "",
+            stop_comment: wo.stop_comment || wo.stop_remarks || wo.stop_reason || "",
+            setting: wo.setting || "",
+            alloted_qty: wo.alloted_qty || 0,
+            ok_qty: wo.ok_qty || 0,
+            reject_qty: wo.reject_qty || 0,
+            device_id: wo.device_id || 0,
+            duration: wo.duration || 0,
         };
 
     } catch (error) {
