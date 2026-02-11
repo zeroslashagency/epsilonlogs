@@ -153,10 +153,14 @@ export interface ReportRow {
     logTime: Date;
     action?: string;
     durationText?: string | undefined;
+    durationSec?: number | undefined;
     label?: string | undefined;
     summary?: string | undefined;
     jobType: "Production" | "Unknown";
     operatorName?: string;
+    classification?: "GOOD" | "WARNING" | "BAD" | "UNKNOWN";
+    reasonCode?: string;
+    reasonText?: string;
 
     // Styling hints
     isJobBlock?: boolean | undefined;

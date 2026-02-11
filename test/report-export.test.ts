@@ -3,6 +3,8 @@ import {
   LOG_SHEET_HEADERS,
   LOG_STYLE_COLORS,
   buildExcelWorkbook,
+  computePdfCanvasSlices,
+  computePdfPageSlices,
   mapReportRowToLogsSheetRow,
 } from '../src/report/export-utils.js';
 import type { ReportRow, ReportStats, WoDetails } from '../src/report/report-types.js';
@@ -119,16 +121,10 @@ describe('report export mapping', () => {
       'Action',
       'Job Tag',
       'Summary / Notes',
+      'WO Core',
+      'Setup / Device',
       'Job Type',
-      'Device Name',
-      'WO Name',
-      'UID ID',
-      'UID Name',
-      'Setting',
-      'Part No',
-      'Alloted Qty',
-      'Start Comment',
-      'PCL',
+      'Operator',
     ]);
   });
 
@@ -143,16 +139,14 @@ describe('report export mapping', () => {
     expect(mapped['Job Tag']).toBe('');
     expect(mapped['Summary / Notes']).toContain('Actual Cycle: 11 min 45 sec');
     expect(mapped['Summary / Notes']).toContain('Target PCL: 11m 40s');
+    expect(mapped['WO Core']).toContain('WO: 2839');
+    expect(mapped['WO Core']).toContain('PCL: 11m 40s');
+    expect(mapped['WO Core']).toContain('Allot: 57');
+    expect(mapped['Setup / Device']).toContain('Part: MET002');
+    expect(mapped['Setup / Device']).toContain('Setting: SETTING -1');
+    expect(mapped['Setup / Device']).toContain('Device: VMC - 05');
     expect(mapped['Job Type']).toBe('Production');
-    expect(mapped['Device Name']).toBe('VMC - 05');
-    expect(mapped['WO Name']).toBe('2839');
-    expect(mapped['UID ID']).toBe(12);
-    expect(mapped['UID Name']).toBe('RamaKrishnan');
-    expect(mapped.Setting).toBe('SETTING -1');
-    expect(mapped['Part No']).toBe('MET002');
-    expect(mapped['Alloted Qty']).toBe(57);
-    expect(mapped['Start Comment']).toBe('Starting');
-    expect(mapped.PCL).toBe('710');
+    expect(mapped.Operator).toBe('RamaKrishnan');
   });
 
   it('maps computed/banner rows with synthetic action and blank serial', () => {
@@ -187,9 +181,13 @@ describe('report export mapping', () => {
     expect(mapped['S.No']).toBe('');
     expect(mapped.Action).toBe('WO_HEADER');
     expect(mapped['Job Tag']).toBe('');
-    expect(mapped['UID ID']).toBe(12);
-    expect(mapped['UID Name']).toBe('RamaKrishnan');
-    expect(mapped['Start Comment']).toBe('Machine starting');
+    expect(mapped['WO Core']).toContain('WO: 2839');
+    expect(mapped['WO Core']).toContain('PCL: 11 min 40 sec');
+    expect(mapped['WO Core']).toContain('Allot: 57');
+    expect(mapped['Setup / Device']).toContain('Part: MET002');
+    expect(mapped['Setup / Device']).toContain('Setting: SETTING -1');
+    expect(mapped['Setup / Device']).toContain('Device: VMC - 05');
+    expect(mapped.Operator).toBe('RamaKrishnan');
   });
 
   it('maps Job Tag for grouped spindle rows', () => {
@@ -292,19 +290,13 @@ describe('report export mapping', () => {
     expect(mapped['Summary / Notes']).toContain('2) TIME / KPI');
     expect(mapped['Summary / Notes']).toContain('3) OUTPUT + COMMENTS');
     expect(mapped['Summary / Notes']).toContain('Allot: 57 | OK: 63 | Reject: 0');
+    expect(mapped['WO Core']).toBe('');
+    expect(mapped['Setup / Device']).toBe('');
     expect(mapped['Job Type']).toBe('');
-    expect(mapped['Device Name']).toBe('');
-    expect(mapped['WO Name']).toBe('');
-    expect(mapped['UID ID']).toBe('');
-    expect(mapped['UID Name']).toBe('');
-    expect(mapped.Setting).toBe('');
-    expect(mapped['Part No']).toBe('');
-    expect(mapped['Alloted Qty']).toBe('');
-    expect(mapped['Start Comment']).toBe('');
-    expect(mapped.PCL).toBe('');
+    expect(mapped.Operator).toBe('');
   });
 
-  it('resolves uid names by start_uid/stop_uid then falls back to start_name', () => {
+  it('resolves operator by start_uid/stop_uid then falls back to start_name', () => {
     const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails()]]);
     const deviceNameMap = new Map<number, string>([[15, 'VMC - 05']]);
 
@@ -322,23 +314,23 @@ describe('report export mapping', () => {
       },
     });
 
-    expect(mapReportRowToLogsSheetRow(stopUidRow, woDetailsMap, deviceNameMap)['UID Name']).toBe('Prabhu');
-    expect(mapReportRowToLogsSheetRow(fallbackRow, woDetailsMap, deviceNameMap)['UID Name']).toBe('Fallback Name');
+    expect(mapReportRowToLogsSheetRow(stopUidRow, woDetailsMap, deviceNameMap).Operator).toBe('Prabhu');
+    expect(mapReportRowToLogsSheetRow(fallbackRow, woDetailsMap, deviceNameMap).Operator).toBe('Fallback Name');
   });
 
   it('falls back to Device <id> when device name lookup is missing', () => {
     const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails()]]);
 
     const mapped = mapReportRowToLogsSheetRow(makeEventRow(), woDetailsMap, new Map());
-    expect(mapped['Device Name']).toBe('Device 15');
+    expect(mapped['Setup / Device']).toContain('Device: Device 15');
   });
 
   it('keeps available fields when WO details are missing', () => {
     const mapped = mapReportRowToLogsSheetRow(makeEventRow(), new Map(), new Map([[15, 'VMC - 05']]));
 
-    expect(mapped['WO Name']).toBe('2839');
-    expect(mapped['Start Comment']).toBe('Starting');
-    expect(mapped.PCL).toBe('710');
+    expect(mapped['WO Core']).toContain('WO: 2839');
+    expect(mapped['WO Core']).toContain('PCL: 11m 50s');
+    expect(mapped['Setup / Device']).toContain('Device: VMC - 05');
   });
 
   it('uses WO PCL fallback when row-level PCL is absent', () => {
@@ -352,7 +344,7 @@ describe('report export mapping', () => {
     });
 
     const mapped = mapReportRowToLogsSheetRow(row, woDetailsMap, deviceNameMap);
-    expect(mapped.PCL).toBe('900');
+    expect(mapped['WO Core']).toContain('PCL: 15m 0s');
   });
 });
 
@@ -486,5 +478,94 @@ describe('report workbook structure', () => {
 
     const jobTagSecondRowFont = logsSheet?.getCell('D3').font as { bold?: boolean };
     expect(jobTagSecondRowFont?.bold).toBe(true);
+  });
+
+  it('renders WO_SUMMARY row as a full-row merged layout split into 3 sections', async () => {
+    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails()]]);
+    const deviceNameMap = new Map<number, string>([[15, 'VMC - 05']]);
+    const woSummaryRow: ReportRow = {
+      rowId: 'wo-summary-303',
+      logTime: new Date('2026-02-09T14:01:19'),
+      jobType: 'Production',
+      timestamp: new Date('2026-02-09T14:01:19').getTime(),
+      isWoSummary: true,
+      woSpecs: {
+        woId: '2839',
+        pclText: '11 min 50 sec',
+        allotted: 57,
+      },
+      woSummaryData: {
+        woIdStr: '2839',
+        partNo: 'MET002',
+        operatorName: 'RamaKrishnan',
+        setting: 'SETTING -1',
+        deviceId: 15,
+        startTime: '09/02/2026, 08:43:07',
+        endTime: '09/02/2026, 14:01:19',
+        totalDuration: '5h 18m 11s',
+        totalJobs: 11,
+        totalCycles: 15,
+        totalCuttingTime: '2h 6m 43s',
+        allotedQty: 57,
+        okQty: 63,
+        rejectQty: 0,
+        totalPauseTime: '25m 48s',
+        pauseReasons: ['Missed Again'],
+        stopComment: 'Jop completed',
+        startComment: 'Starting',
+      },
+    };
+
+    const workbook = await buildExcelWorkbook({
+      rows: [woSummaryRow],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap,
+    });
+
+    const logsSheet = workbook.getWorksheet('Logs');
+    expect(logsSheet).toBeDefined();
+
+    const leftCell = logsSheet?.getCell('A2');
+    const centerCell = logsSheet?.getCell('D2');
+    const rightCell = logsSheet?.getCell('G2');
+
+    expect(String(leftCell?.value || '')).toContain('1) WO INFO');
+    expect(String(centerCell?.value || '')).toContain('2) TIME / KPI');
+    expect(String(rightCell?.value || '')).toContain('3) OUTPUT + COMMENTS');
+
+    expect(logsSheet?.getRow(2).height).toBeGreaterThan(120);
+    expect(logsSheet?.getCell('C2').value).toBe(String(leftCell?.value || ''));
+    expect(logsSheet?.getCell('F2').value).toBe(String(centerCell?.value || ''));
+    expect(logsSheet?.getCell('I2').value).toBe(String(rightCell?.value || ''));
+  });
+});
+
+describe('pdf pagination helpers', () => {
+  it('splits total height into fixed-size slices and remainder', () => {
+    expect(computePdfPageSlices(2500, 1000)).toEqual([
+      { offsetPx: 0, heightPx: 1000 },
+      { offsetPx: 1000, heightPx: 1000 },
+      { offsetPx: 2000, heightPx: 500 },
+    ]);
+  });
+
+  it('returns empty slices for invalid inputs', () => {
+    expect(computePdfPageSlices(0, 1000)).toEqual([]);
+    expect(computePdfPageSlices(1000, 0)).toEqual([]);
+    expect(computePdfCanvasSlices(0, 4000, 200, 120)).toEqual([]);
+    expect(computePdfCanvasSlices(2000, 0, 200, 120)).toEqual([]);
+    expect(computePdfCanvasSlices(2000, 4000, 0, 120)).toEqual([]);
+    expect(computePdfCanvasSlices(2000, 4000, 200, 0)).toEqual([]);
+  });
+
+  it('converts canvas dimensions to page slices using mm page content', () => {
+    // pxPerMm = 2000 / 200 = 10, so one page content height is 120mm -> 1200px.
+    expect(computePdfCanvasSlices(2000, 4100, 200, 120)).toEqual([
+      { offsetPx: 0, heightPx: 1200 },
+      { offsetPx: 1200, heightPx: 1200 },
+      { offsetPx: 2400, heightPx: 1200 },
+      { offsetPx: 3600, heightPx: 500 },
+    ]);
   });
 });

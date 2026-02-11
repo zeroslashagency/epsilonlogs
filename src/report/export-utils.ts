@@ -1,8 +1,7 @@
 import type { Font, Row, Workbook, Worksheet } from 'exceljs';
 import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { formatDuration } from './format-utils.js';
-import { ReportConfig, ReportRow, ReportStats, WoDetails } from './report-types.js';
+import { ReportConfig, ReportRow, ReportStats, WoDetails, WoSummaryData } from './report-types.js';
 
 export const LOG_SHEET_HEADERS = [
     'S.No',
@@ -10,16 +9,10 @@ export const LOG_SHEET_HEADERS = [
     'Action',
     'Job Tag',
     'Summary / Notes',
+    'WO Core',
+    'Setup / Device',
     'Job Type',
-    'Device Name',
-    'WO Name',
-    'UID ID',
-    'UID Name',
-    'Setting',
-    'Part No',
-    'Alloted Qty',
-    'Start Comment',
-    'PCL',
+    'Operator',
 ] as const;
 
 export const LOG_STYLE_COLORS = {
@@ -52,16 +45,10 @@ export interface LogsSheetRow {
     Action: string;
     'Job Tag': string;
     'Summary / Notes': string;
+    'WO Core': string;
+    'Setup / Device': string;
     'Job Type': string;
-    'Device Name': string;
-    'WO Name': string;
-    'UID ID': number | '';
-    'UID Name': string;
-    Setting: string;
-    'Part No': string;
-    'Alloted Qty': number | '';
-    'Start Comment': string;
-    PCL: string;
+    Operator: string;
 }
 
 export interface ExcelExportInput {
@@ -78,17 +65,11 @@ const LOG_SHEET_COLUMN_WIDTHS = [
     22,  // Log Time
     16,  // Action
     14,  // Job Tag
-    44,  // Summary / Notes
+    38,  // Summary / Notes
+    22,  // WO Core
+    28,  // Setup / Device
     14,  // Job Type
-    18,  // Device Name
-    14,  // WO Name
-    10,  // UID ID
-    18,  // UID Name
-    18,  // Setting
-    16,  // Part No
-    12,  // Alloted Qty
-    40,  // Start Comment
-    10,  // PCL
+    20,  // Operator
 ] as const;
 
 interface ExportRowVisual {
@@ -111,16 +92,10 @@ const LOG_COLUMN_INDEX = {
     action: 3,
     jobTag: 4,
     summaryNotes: 5,
-    jobType: 6,
-    deviceName: 7,
-    woName: 8,
-    uidId: 9,
-    uidName: 10,
-    setting: 11,
-    partNo: 12,
-    allotedQty: 13,
-    startComment: 14,
-    pcl: 15,
+    woCore: 6,
+    setupDevice: 7,
+    jobType: 8,
+    operator: 9,
 } as const;
 
 type ExcelJSImport = typeof import('exceljs');
@@ -665,13 +640,97 @@ function resolveSummaryNotes(row: ReportRow, woDetails?: WoDetails): string {
     }
 }
 
+function buildWoSummarySectionTexts(summary: WoSummaryData, pclText: string): { left: string; center: string; right: string } {
+    const pauseReasonsText = summary.pauseReasons.length > 0 ? summary.pauseReasons.join(', ') : '—';
+
+    const left = [
+        '1) WO INFO',
+        `Part: ${summary.partNo}`,
+        `Operator: ${summary.operatorName}`,
+        `Device: ${summary.deviceId}`,
+        `Setting: ${summary.setting}`,
+        `WO: ${summary.woIdStr}`,
+        `PCL: ${pclText}`,
+    ].join('\n');
+
+    const center = [
+        '2) TIME / KPI',
+        `Start: ${summary.startTime || '—'}`,
+        `End: ${summary.endTime || '—'}`,
+        `Duration: ${summary.totalDuration}`,
+        `Jobs: ${summary.totalJobs} | Cycles: ${summary.totalCycles}`,
+        `Cutting: ${summary.totalCuttingTime}`,
+        `Pause: ${summary.totalPauseTime}`,
+    ].join('\n');
+
+    const right = [
+        '3) OUTPUT + COMMENTS',
+        `Allot: ${summary.allotedQty} | OK: ${summary.okQty} | Reject: ${summary.rejectQty}`,
+        `Start Comment: ${quoteOrDash(summary.startComment || '')}`,
+        `Stop Comment: ${quoteOrDash(summary.stopComment || '')}`,
+        `Pause Reasons: ${pauseReasonsText}`,
+    ].join('\n');
+
+    return { left, center, right };
+}
+
+function resolveOperator(row: ReportRow, woDetails?: WoDetails): string {
+    const uidId = resolveUidId(row, woDetails);
+    return resolveUidName(row, uidId, woDetails)
+        || row.operatorName
+        || woDetails?.start_name
+        || '';
+}
+
+function normalizePclForSpecs(rawPcl: string): string {
+    const trimmed = rawPcl.trim();
+    if (!trimmed) return '—';
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+        return formatDuration(numeric);
+    }
+    return trimmed;
+}
+
+function resolveWoCoreBlock(
+    row: ReportRow,
+    woDetails: WoDetails | undefined,
+): string {
+    const woText = resolveWoName(row, woDetails) || '—';
+    const pclText = row.woSpecs?.pclText
+        || (woDetails?.pcl !== null && woDetails?.pcl !== undefined ? formatDuration(woDetails.pcl) : normalizePclForSpecs(resolvePcl(row, woDetails)));
+    const alloted = resolveAllotedQty(row, woDetails);
+    const allotText = alloted === '' ? '—' : String(alloted);
+
+    return [
+        `WO: ${woText}`,
+        `PCL: ${pclText || '—'}`,
+        `Allot: ${allotText}`,
+    ].join('\n');
+}
+
+function resolveSetupDeviceBlock(
+    row: ReportRow,
+    woDetails: WoDetails | undefined,
+    deviceNameMap: Map<number, string>
+): string {
+    const partText = resolvePartNo(row, woDetails) || '—';
+    const settingText = resolveSetting(row, woDetails) || '—';
+    const deviceText = resolveDeviceName(row, woDetails, deviceNameMap) || '—';
+
+    return [
+        `Part: ${partText}`,
+        `Setting: ${settingText}`,
+        `Device: ${deviceText}`,
+    ].join('\n');
+}
+
 export function mapReportRowToLogsSheetRow(
     row: ReportRow,
     woDetailsMap: Map<number, WoDetails>,
     deviceNameMap: Map<number, string>
 ): LogsSheetRow {
     const woDetails = resolveWoDetails(row, woDetailsMap);
-    const uidId = resolveUidId(row, woDetails);
     const isWoSummaryRow = !!row.isWoSummary;
 
     return {
@@ -680,16 +739,10 @@ export function mapReportRowToLogsSheetRow(
         Action: resolveExportAction(row),
         'Job Tag': resolveJobTag(row),
         'Summary / Notes': resolveSummaryNotes(row, woDetails),
+        'WO Core': isWoSummaryRow ? '' : resolveWoCoreBlock(row, woDetails),
+        'Setup / Device': isWoSummaryRow ? '' : resolveSetupDeviceBlock(row, woDetails, deviceNameMap),
         'Job Type': isWoSummaryRow ? '' : row.jobType || '',
-        'Device Name': isWoSummaryRow ? '' : resolveDeviceName(row, woDetails, deviceNameMap),
-        'WO Name': isWoSummaryRow ? '' : resolveWoName(row, woDetails),
-        'UID ID': isWoSummaryRow ? '' : uidId ?? '',
-        'UID Name': isWoSummaryRow ? '' : resolveUidName(row, uidId, woDetails),
-        Setting: isWoSummaryRow ? '' : resolveSetting(row, woDetails),
-        'Part No': isWoSummaryRow ? '' : resolvePartNo(row, woDetails),
-        'Alloted Qty': isWoSummaryRow ? '' : resolveAllotedQty(row, woDetails),
-        'Start Comment': isWoSummaryRow ? '' : resolveStartComment(row, woDetails),
-        PCL: isWoSummaryRow ? '' : resolvePcl(row, woDetails),
+        Operator: isWoSummaryRow ? '' : resolveOperator(row, woDetails),
     };
 }
 
@@ -812,16 +865,16 @@ function applyDataRowStyle(row: Row, visual: ExportRowVisual, groupMeta: JobGrou
 
         const horizontal = col === LOG_COLUMN_INDEX.serialNo
             || col === LOG_COLUMN_INDEX.jobTag
-            || col === LOG_COLUMN_INDEX.uidId
+            || col === LOG_COLUMN_INDEX.jobType
             ? 'center'
-            : col === LOG_COLUMN_INDEX.allotedQty || col === LOG_COLUMN_INDEX.pcl
-                ? 'right'
-                : 'left';
+            : 'left';
 
         cell.alignment = {
             vertical: 'top',
             horizontal,
-            wrapText: col === LOG_COLUMN_INDEX.summaryNotes || col === LOG_COLUMN_INDEX.startComment,
+            wrapText: col === LOG_COLUMN_INDEX.summaryNotes
+                || col === LOG_COLUMN_INDEX.woCore
+                || col === LOG_COLUMN_INDEX.setupDevice,
         };
     }
 
@@ -850,6 +903,64 @@ function applyDataRowStyle(row: Row, visual: ExportRowVisual, groupMeta: JobGrou
             wrapText: false,
         };
     }
+}
+
+function createBlankLogsRow(): Record<(typeof LOG_SHEET_HEADERS)[number], string> {
+    return LOG_SHEET_HEADERS.reduce((acc, header) => {
+        acc[header] = '';
+        return acc;
+    }, {} as Record<(typeof LOG_SHEET_HEADERS)[number], string>);
+}
+
+function applyWoSummaryMergedRow(
+    worksheet: Worksheet,
+    rowNumber: number,
+    summary: WoSummaryData,
+    pclText: string,
+): void {
+    const sectionRanges: Array<{ start: number; end: number; text: string }> = [];
+    const colCount = LOG_SHEET_HEADERS.length;
+    const leftEnd = Math.max(1, Math.floor(colCount / 3));
+    const centerEnd = Math.max(leftEnd + 1, Math.floor((colCount * 2) / 3));
+
+    const sections = buildWoSummarySectionTexts(summary, pclText);
+    sectionRanges.push({ start: 1, end: leftEnd, text: sections.left });
+    sectionRanges.push({ start: leftEnd + 1, end: centerEnd, text: sections.center });
+    sectionRanges.push({ start: centerEnd + 1, end: colCount, text: sections.right });
+
+    for (const section of sectionRanges) {
+        if (section.start > section.end) continue;
+        const startRef = `${toExcelColumnName(section.start)}${rowNumber}`;
+        const endRef = `${toExcelColumnName(section.end)}${rowNumber}`;
+        worksheet.mergeCells(`${startRef}:${endRef}`);
+
+        const cell = worksheet.getCell(startRef);
+        cell.value = section.text;
+        cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: LOG_STYLE_COLORS.woSummaryBg },
+        };
+        cell.font = {
+            color: { argb: LOG_STYLE_COLORS.whiteText },
+            bold: false,
+            size: 11,
+        };
+        cell.alignment = {
+            vertical: 'top',
+            horizontal: 'left',
+            wrapText: true,
+        };
+        cell.border = {
+            top: { style: 'medium', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            left: { style: 'medium', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            bottom: { style: 'medium', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            right: { style: 'medium', color: { argb: LOG_STYLE_COLORS.gridLine } },
+        };
+    }
+
+    const row = worksheet.getRow(rowNumber);
+    row.height = 155;
 }
 
 function addLogsSheet(workbook: Workbook, input: ExcelExportInput): void {
@@ -899,6 +1010,15 @@ function addLogsSheet(workbook: Workbook, input: ExcelExportInput): void {
         if (!outputRow) {
             return;
         }
+
+        if (rawRow.isWoSummary && rawRow.woSummaryData) {
+            const blankRow = createBlankLogsRow();
+            const worksheetRow = worksheet.addRow(blankRow);
+            const pclText = resolvePclTextForSummary(rawRow, resolveWoDetails(rawRow, input.woDetailsMap));
+            applyWoSummaryMergedRow(worksheet, worksheetRow.number, rawRow.woSummaryData, pclText);
+            return;
+        }
+
         const worksheetRow = worksheet.addRow(outputRow);
         const groupMeta = groupMetaByIndex[index] ?? {
             groupKey: null,
@@ -1170,82 +1290,175 @@ export async function exportToExcel(input: ExcelExportInput): Promise<void> {
     URL.revokeObjectURL(url);
 }
 
-/**
- * Existing PDF export kept unchanged.
- */
-function preparePdfExportData(rows: ReportRow[]) {
-    return rows.map(row => {
-        let woSpecsStr = '';
-        if (row.woSpecs) {
-            woSpecsStr = `WO: ${row.woSpecs.woId}\nPCL: ${row.woSpecs.pclText}\nAllot: ${row.woSpecs.allotted}`;
-        }
+export interface PdfExportInput {
+    sourceElement: HTMLElement;
+    filename?: string;
+    marginMm?: number;
+}
 
-        let summaryText = row.summary || '';
-        if (row.isWoHeader && row.woHeaderData) {
-            summaryText = `🔧 WO #${row.woHeaderData.woIdStr} - Part: ${row.woHeaderData.partNo} - Op: ${row.woHeaderData.operatorName}`;
-        } else if (row.isWoSummary && row.woSummaryData) {
-            summaryText = `📊 WO #${row.woSummaryData.woIdStr} Summary - Jobs: ${row.woSummaryData.totalJobs}, Cycles: ${row.woSummaryData.totalCycles}`;
-        } else if (row.isPauseBanner && row.pauseBannerData) {
-            summaryText = `⚠️ ${row.pauseBannerData.isShiftBreak ? 'SHIFT BREAK' : 'PAUSE'}: ${row.pauseBannerData.reason} (${row.pauseBannerData.durationText})`;
-        }
+export interface PdfPageSlice {
+    offsetPx: number;
+    heightPx: number;
+}
 
-        return {
-            'S.No': row.sNo || '',
-            'Log ID': row.logId || '',
-            'Log Time': row.logTime.toLocaleString('en-GB'),
-            'Action': row.action || '',
-            'Duration': row.durationText || '',
-            'Label': row.jobBlockLabel || row.label || '',
-            'Summary / Notes': summaryText,
-            'WO Specs': woSpecsStr,
-            'Job Type': row.jobType || '',
-            'Operator': row.operatorName || ''
-        };
+const PDF_EXPORT_ATTR = 'data-pdf-export-token';
+const DEFAULT_PDF_MARGIN_MM = 8;
+
+export function computePdfPageSlices(totalHeightPx: number, pageHeightPx: number): PdfPageSlice[] {
+    if (totalHeightPx <= 0 || pageHeightPx <= 0) {
+        return [];
+    }
+
+    const slices: PdfPageSlice[] = [];
+    let offsetPx = 0;
+
+    while (offsetPx < totalHeightPx) {
+        const heightPx = Math.min(pageHeightPx, totalHeightPx - offsetPx);
+        slices.push({ offsetPx, heightPx });
+        offsetPx += heightPx;
+    }
+
+    return slices;
+}
+
+export function computePdfCanvasSlices(
+    canvasWidthPx: number,
+    canvasHeightPx: number,
+    contentWidthMm: number,
+    contentHeightMm: number,
+): PdfPageSlice[] {
+    if (canvasWidthPx <= 0 || canvasHeightPx <= 0 || contentWidthMm <= 0 || contentHeightMm <= 0) {
+        return [];
+    }
+
+    const pxPerMm = canvasWidthPx / contentWidthMm;
+    const pageHeightPx = Math.max(1, Math.floor(contentHeightMm * pxPerMm));
+    return computePdfPageSlices(canvasHeightPx, pageHeightPx);
+}
+
+function preparePdfClone(root: HTMLElement, widthPx: number): void {
+    root.style.width = `${Math.max(widthPx, root.scrollWidth)}px`;
+    root.style.maxWidth = 'none';
+    root.style.overflow = 'visible';
+    root.style.background = '#ffffff';
+
+    root.querySelectorAll<HTMLElement>('[data-pdf-exclude="true"]').forEach((node) => node.remove());
+
+    root.querySelectorAll<HTMLElement>('.overflow-x-auto').forEach((node) => {
+        node.style.overflow = 'visible';
+        node.style.maxWidth = 'none';
+    });
+
+    root.querySelectorAll<HTMLElement>('thead').forEach((node) => {
+        node.style.position = 'static';
+        node.style.top = 'auto';
+    });
+
+    root.querySelectorAll<HTMLElement>('*').forEach((node) => {
+        node.style.animation = 'none';
+        node.style.transition = 'none';
     });
 }
 
-export function exportToPDF(rows: ReportRow[], filename: string = 'device_report.pdf') {
+async function renderElementToCanvas(sourceElement: HTMLElement): Promise<HTMLCanvasElement> {
+    const { default: html2canvas } = await import('html2canvas');
+    const token = `pdf-export-${Date.now()}-${Math.round(Math.random() * 1_000_000)}`;
+    sourceElement.setAttribute(PDF_EXPORT_ATTR, token);
+
+    try {
+        const widthPx = Math.max(sourceElement.scrollWidth, sourceElement.clientWidth);
+        const heightPx = Math.max(sourceElement.scrollHeight, sourceElement.clientHeight);
+        const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+
+        return await html2canvas(sourceElement, {
+            backgroundColor: '#ffffff',
+            useCORS: true,
+            logging: false,
+            scale,
+            windowWidth: widthPx,
+            windowHeight: heightPx,
+            onclone: (clonedDocument) => {
+                const clonedRoot = clonedDocument.querySelector<HTMLElement>(`[${PDF_EXPORT_ATTR}="${token}"]`);
+                if (!clonedRoot) return;
+                preparePdfClone(clonedRoot, widthPx);
+            },
+        });
+    } finally {
+        sourceElement.removeAttribute(PDF_EXPORT_ATTR);
+    }
+}
+
+function drawCanvasSlice(sourceCanvas: HTMLCanvasElement, slice: PdfPageSlice): HTMLCanvasElement {
+    const pageCanvas = document.createElement('canvas');
+    pageCanvas.width = sourceCanvas.width;
+    pageCanvas.height = slice.heightPx;
+
+    const context = pageCanvas.getContext('2d');
+    if (!context) {
+        throw new Error('Unable to get 2D context for PDF page rendering.');
+    }
+
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+    context.drawImage(
+        sourceCanvas,
+        0,
+        slice.offsetPx,
+        sourceCanvas.width,
+        slice.heightPx,
+        0,
+        0,
+        sourceCanvas.width,
+        slice.heightPx,
+    );
+
+    return pageCanvas;
+}
+
+export async function exportToPDF(input: PdfExportInput): Promise<void> {
+    if (!input.sourceElement) {
+        throw new Error('Missing source element for PDF export.');
+    }
+
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+        throw new Error('PDF export is only available in a browser environment.');
+    }
+
+    const filename = input.filename || 'device_report.pdf';
+    const marginMm = input.marginMm ?? DEFAULT_PDF_MARGIN_MM;
     const doc = new jsPDF('l', 'mm', 'a4');
-    const data = preparePdfExportData(rows);
-    const applyAutoTable = autoTable as unknown as (doc: jsPDF, options: Record<string, unknown>) => void;
 
-    const headers = [['S.No', 'Log ID', 'Log Time', 'Action', 'Duration', 'Label', 'WO Specs', 'Summary / Notes', 'Job Type', 'Operator']];
-    const body = data.map(item => [
-        item['S.No'],
-        item['Log ID'],
-        item['Log Time'],
-        item['Action'],
-        item['Duration'],
-        item['Label'],
-        item['WO Specs'],
-        item['Summary / Notes'],
-        item['Job Type'],
-        item['Operator']
-    ]);
+    const pageWidthMm = doc.internal.pageSize.getWidth();
+    const pageHeightMm = doc.internal.pageSize.getHeight();
+    const contentWidthMm = pageWidthMm - marginMm * 2;
+    const contentHeightMm = pageHeightMm - marginMm * 2;
 
-    doc.setFontSize(18);
-    doc.text('Device Logs Report', 14, 15);
-    doc.setFontSize(10);
-    doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 22);
+    if (contentWidthMm <= 0 || contentHeightMm <= 0) {
+        throw new Error('Invalid PDF margin configuration.');
+    }
 
-    applyAutoTable(doc, {
-        head: headers,
-        body,
-        startY: 25,
-        styles: { fontSize: 8, cellPadding: 2 },
-        headStyles: { fillStyle: 'F', fillColor: [30, 41, 59] },
-        columnStyles: {
-            0: { cellWidth: 10 },
-            1: { cellWidth: 15 },
-            2: { cellWidth: 35 },
-            3: { cellWidth: 20 },
-            4: { cellWidth: 20 },
-            5: { cellWidth: 20 },
-            6: { cellWidth: 30 },
-            7: { cellWidth: 'auto' },
-            8: { cellWidth: 20 },
-            9: { cellWidth: 25 },
-        },
+    const sourceCanvas = await renderElementToCanvas(input.sourceElement);
+    const slices = computePdfCanvasSlices(
+        sourceCanvas.width,
+        sourceCanvas.height,
+        contentWidthMm,
+        contentHeightMm,
+    );
+
+    if (slices.length === 0) {
+        throw new Error('No report content available for PDF export.');
+    }
+
+    slices.forEach((slice, index) => {
+        if (index > 0) {
+            doc.addPage('a4', 'l');
+        }
+
+        const pageCanvas = drawCanvasSlice(sourceCanvas, slice);
+        const imageData = pageCanvas.toDataURL('image/png');
+        const renderedHeightMm = (slice.heightPx * contentWidthMm) / sourceCanvas.width;
+
+        doc.addImage(imageData, 'PNG', marginMm, marginMm, contentWidthMm, renderedHeightMm, undefined, 'FAST');
     });
 
     doc.save(filename);

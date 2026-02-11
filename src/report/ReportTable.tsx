@@ -31,7 +31,8 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
 
     return (
         <div className="border rounded-xl overflow-hidden shadow-lg bg-white">
-            <table className="w-full text-sm text-left border-collapse">
+            <div className="overflow-x-auto">
+                <table className="w-full min-w-[980px] text-sm text-left border-collapse">
                 <thead>
                     <tr className="bg-slate-800 text-white">
                         <th className="px-3 py-3 font-semibold w-14 text-center">S.No</th>
@@ -316,7 +317,8 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                         );
                     })}
                 </tbody>
-            </table>
+                </table>
+            </div>
         </div>
     );
 }

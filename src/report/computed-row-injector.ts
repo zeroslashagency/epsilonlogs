@@ -95,6 +95,7 @@ export function injectComputedRows(
                 logTime: new Date(refTime + 1000),
                 action: "",
                 durationText: formatDuration(idealSec),
+                durationSec: idealSec,
                 label: "Ideal Time",
                 summary: formatDuration(idealSec),
                 jobType: segment.jobType,
@@ -140,6 +141,7 @@ export function injectComputedRows(
                 action: "SPINDLE_OFF",
                 label: block.label,
                 durationText: formatDuration(cycle.durationSec),
+                durationSec: cycle.durationSec,
                 jobType: segment.jobType,
                 isJobBlock: true,
                 jobBlockLabel: block.label,
@@ -211,12 +213,13 @@ export function injectComputedRows(
 
     for (const log of pauseResumeLogs) {
         let durationText: string | undefined;
-        let pauseBannerData = undefined;
+        let durationSec: number | undefined;
 
         if (log.action === "WO_PAUSE") {
             const pair = segment.pausePeriods.find((p: PausePeriod) => p.pauseLog.log_id === log.log_id);
             if (pair) {
                 durationText = formatDuration(pair.durationSec);
+                durationSec = pair.durationSec;
                 const isShiftBreak = pair.durationSec > SHIFT_BREAK_SEC;
 
                 // Find reason from WO extensions
@@ -248,6 +251,7 @@ export function injectComputedRows(
             logTime: new Date(log.log_time),
             action: log.action,
             durationText,
+            durationSec,
             jobType: segment.jobType,
             originalLog: log,
             timestamp: new Date(log.log_time).getTime(),
@@ -348,6 +352,7 @@ function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jo
         logTime: new Date(ts),
         action: "",
         durationText: formatDuration(sec),
+        durationSec: sec,
         label,
         summary: undefined, // Fixed: was formatDuration(sec), causing double display
         jobType,
@@ -360,4 +365,3 @@ function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jo
 }
 
 // Helper functions removed in favor of format-utils.ts
-

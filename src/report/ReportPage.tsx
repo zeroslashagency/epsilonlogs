@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ArrowLeft, FileText, Download, Play, Activity, Users, Package, Timer, Coffee, Loader2, BarChart3, Zap } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { ArrowLeft, ArrowLeftRight, FileText, Download, Play, Activity, Users, Package, Timer, Coffee, Loader2, BarChart3, Zap } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { ReportTable } from './ReportTable';
 import { ReportConfig, ReportRow, ReportStats, WoDetails } from './report-types';
@@ -27,6 +27,7 @@ export default function ReportPage() {
     const [woDetailsMap, setWoDetailsMap] = useState<Map<number, WoDetails>>(new Map());
     const [deviceNameMap, setDeviceNameMap] = useState<Map<number, string>>(new Map());
     const [error, setError] = useState<string | null>(null);
+    const reportExportRef = useRef<HTMLDivElement | null>(null);
 
     const handleGenerate = async () => {
         setLoading(true);
@@ -79,6 +80,13 @@ export default function ReportPage() {
                         <p className="text-sm text-slate-500">Generate Job Block analysis from raw device logs</p>
                     </div>
                 </div>
+                <Link
+                    to="/report-v2"
+                    className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                >
+                    <ArrowLeftRight className="h-4 w-4" />
+                    Open V2
+                </Link>
             </header>
 
             {/* Controls */}
@@ -119,16 +127,17 @@ export default function ReportPage() {
                 )}
             </div>
 
-            {
-                stats && (
-                    <div className="space-y-5">
+            <div ref={reportExportRef} className="space-y-5">
+                {
+                    stats && (
+                        <div className="space-y-5">
                         {/* Section Header + Export Buttons */}
                         <div className="flex items-center justify-between">
                             <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
                                 <BarChart3 className="h-5 w-5 text-indigo-600" />
                                 Results Analysis
                             </h2>
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-3" data-pdf-exclude="true">
                                 <button
                                     onClick={async () => {
                                         try {
@@ -154,8 +163,13 @@ export default function ReportPage() {
                                 <button
                                     onClick={async () => {
                                         try {
+                                            if (!reportExportRef.current) {
+                                                throw new Error('Report is not ready for PDF export.');
+                                            }
                                             const { exportToPDF } = await import('./export-utils');
-                                            exportToPDF(rows);
+                                            await exportToPDF({
+                                                sourceElement: reportExportRef.current,
+                                            });
                                         } catch (err: unknown) {
                                             const message = err instanceof Error ? err.message : 'PDF export failed.';
                                             setError(message);
@@ -325,12 +339,13 @@ export default function ReportPage() {
                                 </div>
                             </div>
                         )}
-                    </div>
-                )
-            }
+                        </div>
+                    )
+                }
 
-            {/* Report Table */}
-            <ReportTable rows={rows} loading={loading} />
+                {/* Report Table */}
+                <ReportTable rows={rows} loading={loading} />
+            </div>
         </div >
     );
 }

@@ -101,14 +101,14 @@ export function buildReport(
             let segLoadingSec = 0;
             let segIdleSec = 0;
             for (const row of rows) {
-                if (row.isComputed && row.label) {
-                    const durMatch = row.durationText;
-                    const secs = parseDurationToSec(durMatch);
-                    if (row.label.toLowerCase().includes("loading")) {
-                        segLoadingSec += secs;
-                    } else if (row.label.toLowerCase().includes("idle") || row.label.toLowerCase().includes("break")) {
-                        segIdleSec += secs;
-                    }
+                if (!row.isComputed || !row.label || typeof row.durationSec !== "number") {
+                    continue;
+                }
+
+                if (row.label.toLowerCase().includes("loading")) {
+                    segLoadingSec += row.durationSec;
+                } else if (row.label.toLowerCase().includes("idle") || row.label.toLowerCase().includes("break")) {
+                    segIdleSec += row.durationSec;
                 }
             }
             totalLoadingUnloadingSec += segLoadingSec;
@@ -230,19 +230,4 @@ export function buildReport(
 
     console.log(`Final report: ${allRows.length} rows, ${totalJobs} jobs, ${totalCycles} cycles`);
     return { rows: allRows, stats };
-}
-
-// --- Helper ---
-
-/**
- * Parse a duration text like "7 min 31 sec" or "32 sec" into total seconds.
- */
-function parseDurationToSec(durationText?: string): number {
-    if (!durationText) return 0;
-    let total = 0;
-    const minMatch = durationText.match(/(\d+)\s*min/);
-    const secMatch = durationText.match(/(\d+)\s*sec/);
-    if (minMatch?.[1]) total += parseInt(minMatch[1], 10) * 60;
-    if (secMatch?.[1]) total += parseInt(secMatch[1], 10);
-    return total;
 }

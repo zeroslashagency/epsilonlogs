@@ -10,11 +10,22 @@
   --primary: 242 82% 61%;
   --primary-foreground: 210 20% 98%;
   --border: 220 13% 91%;
+
+  /* V2 palette: industrial precision */
+  --steel-950: #020617;
+  --steel-900: #0f172a;
+  --steel-800: #1e293b;
+  --steel-700: #334155;
+  --steel-300: #cbd5e1;
+  --good-500: #10b981;
+  --warning-500: #f59e0b;
+  --bad-500: #ef4444;
+  --unknown-500: #64748b;
 }
 
 body {
   @apply bg-background text-foreground antialiased;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
 }
 
 .glass-card {
@@ -28,4 +39,20 @@ body {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: .7; }
+}
+
+.status-good {
+  color: var(--good-500);
+}
+
+.status-warning {
+  color: var(--warning-500);
+}
+
+.status-bad {
+  color: var(--bad-500);
+}
+
+.status-unknown {
+  color: var(--unknown-500);
 }

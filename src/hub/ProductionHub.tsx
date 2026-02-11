@@ -4,7 +4,7 @@ import { KpiCards } from './KpiCards.js';
 import { FilterPanel } from './FilterPanel.js';
 import { HubTable } from './HubTable.js';
 import { HubKpi, ProductionCycle } from './types.js';
-import { Layers, Activity, AlertTriangle, CheckCircle2, RotateCcw, FileText } from 'lucide-react';
+import { Layers, Activity, AlertTriangle, CheckCircle2, RotateCcw, FileText, ArrowLeftRight } from 'lucide-react';
 import { fetchDeviceLogs, fetchAllWoDetails } from '../report/api-client.js';
 import { normalizeLogs, extractWoIds } from '../report/log-normalizer.js';
 import { DeviceLogEntry, ReportConfig } from '../report/report-types.js';
@@ -126,6 +126,10 @@ export default function ProductionHub() {
                         <Link to="/report" className="bg-white hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors flex items-center gap-2 shadow-sm border border-slate-200">
                             <FileText className="w-4 h-4" />
                             Device Logs Report
+                        </Link>
+                        <Link to="/hub-v2" className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors flex items-center gap-2 shadow-sm border border-indigo-200">
+                            <ArrowLeftRight className="w-4 h-4" />
+                            Hub V2
                         </Link>
                         <button
                             onClick={fetchData}
