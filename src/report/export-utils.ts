@@ -15,6 +15,17 @@ export const LOG_SHEET_HEADERS = [
     'Operator',
 ] as const;
 
+export const GROUPED_LOG_SHEET_HEADERS = [
+    'S.No',
+    'Log ID',
+    'Log Time',
+    'Action',
+    'TIME',
+    'PLC',
+    'JOB',
+    'OP',
+] as const;
+
 export const LOG_STYLE_COLORS = {
     headerBg: 'FF1E293B',
     headerText: 'FFFFFFFF',
@@ -37,6 +48,12 @@ export const LOG_STYLE_COLORS = {
     sectionHeader: 'FFE2E8F0',
     tableHeader: 'FFE0E7FF',
     rejectText: 'FFDC2626',
+    groupedYellow: 'FFFFFF00',
+    groupedGreen: 'FF92D050',
+    groupedBeige: 'FFE8D695',
+    groupedOrange: 'FFF4B183',
+    groupedOutline: 'FF22C55E',
+    groupedSummaryBg: 'FF1E3A8A',
 } as const;
 
 export interface LogsSheetRow {
@@ -49,6 +66,17 @@ export interface LogsSheetRow {
     'Setup / Device': string;
     'Job Type': string;
     Operator: string;
+}
+
+export interface GroupedLogsSheetRow {
+    'S.No': number | '';
+    'Log ID': number | '';
+    'Log Time': string;
+    Action: string;
+    TIME: string;
+    PLC: string;
+    JOB: string;
+    OP: string;
 }
 
 export interface ExcelExportInput {
@@ -70,6 +98,17 @@ const LOG_SHEET_COLUMN_WIDTHS = [
     28,  // Setup / Device
     14,  // Job Type
     20,  // Operator
+] as const;
+
+const GROUPED_LOG_SHEET_COLUMN_WIDTHS = [
+    8,   // S.No
+    10,  // Log ID
+    26,  // Log Time
+    18,  // Action
+    14,  // TIME
+    14,  // PLC
+    20,  // JOB
+    18,  // OP
 ] as const;
 
 interface ExportRowVisual {
@@ -103,6 +142,20 @@ type WorkbookCtor = new () => Workbook;
 
 let excelJsModulePromise: Promise<ExcelJSImport> | null = null;
 let excelJsMinModulePromise: Promise<unknown> | null = null;
+
+type GroupedRowStyle = 'default' | 'yellowAction' | 'spindlePair' | 'keyPair' | 'pausePair' | 'summary';
+
+interface GroupedExportRow {
+    row: GroupedLogsSheetRow;
+    style: GroupedRowStyle;
+    pairId?: string;
+    mergePlc?: boolean;
+    mergeJob?: boolean;
+    jobGroupKey?: string | null;
+    isGroupFirst?: boolean;
+    isGroupLast?: boolean;
+    rowNumber?: number;
+}
 
 function delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -725,6 +778,544 @@ function resolveSetupDeviceBlock(
     ].join('\n');
 }
 
+function formatGroupedLogDateTime(date: Date): string {
+    return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+    });
+}
+
+function formatGroupedTime24(date: Date): string {
+    const hh = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    const sec = String(date.getSeconds()).padStart(2, '0');
+    return `${hh}:${min}:${sec}`;
+}
+
+function formatGroupedTime12(date: Date): string {
+    return date.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+    });
+}
+
+function formatSecondsToClock(seconds: number | undefined): string {
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds)) {
+        return '';
+    }
+
+    const total = Math.max(0, Math.round(seconds));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function formatSecondsToVerbose(seconds: number | undefined): string {
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds)) {
+        return '';
+    }
+    const total = Math.max(0, Math.round(seconds));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    if (hours > 0) {
+        return `${hours}h ${minutes}min ${secs} sec`;
+    }
+    return `${minutes}min ${secs} sec`;
+}
+
+function normalizeGroupedJobLabel(label: string): string {
+    const trimmed = label.trim();
+    const matched = trimmed.match(/^job\s*-\s*0*(\d+)$/i);
+    if (matched) {
+        return `JOB ${matched[1]}`;
+    }
+    return trimmed.toUpperCase();
+}
+
+function normalizeCommentValue(value: unknown): string {
+    return String(value ?? '').trim();
+}
+
+function resolveGroupedPauseReason(
+    row: ReportRow,
+    woDetailsMap: Map<number, WoDetails>,
+    bannerReason?: string,
+): string {
+    const woDetails = resolveWoDetails(row, woDetailsMap);
+    return normalizeCommentValue(bannerReason)
+        || normalizeCommentValue(row.summary)
+        || normalizeCommentValue(toStringValue(row.originalLog?.stop_comment))
+        || normalizeCommentValue(toStringValue(row.originalLog?.start_comment))
+        || normalizeCommentValue(woDetails?.stop_comment)
+        || normalizeCommentValue(woDetails?.start_comment);
+}
+
+function resolveGroupedResumeNote(row: ReportRow): string {
+    return normalizeCommentValue(row.summary)
+        || normalizeCommentValue(toStringValue(row.originalLog?.stop_comment))
+        || normalizeCommentValue(toStringValue(row.originalLog?.start_comment));
+}
+
+function resolveGroupedWoActionComment(
+    row: ReportRow,
+    woDetailsMap: Map<number, WoDetails>,
+): string {
+    const woDetails = resolveWoDetails(row, woDetailsMap);
+    const action = resolveExportAction(row);
+
+    if (action === 'WO_START') {
+        const comment = normalizeCommentValue(row.startRowData?.comment)
+            || normalizeCommentValue(toStringValue(row.originalLog?.start_comment))
+            || normalizeCommentValue(woDetails?.start_comment)
+            || normalizeCommentValue(row.summary);
+        return `Comment - ${comment || '—'}`;
+    }
+
+    if (action === 'WO_PAUSE') {
+        const reason = resolveGroupedPauseReason(row, woDetailsMap);
+        return `Reason - ${reason || '—'}`;
+    }
+
+    if (action === 'WO_RESUME') {
+        const note = resolveGroupedResumeNote(row);
+        return `Note - ${note || '—'}`;
+    }
+
+    if (action === 'WO_STOP') {
+        const reason = normalizeCommentValue(row.stopRowData?.reason)
+            || normalizeCommentValue(toStringValue(row.originalLog?.stop_comment))
+            || normalizeCommentValue(woDetails?.stop_comment)
+            || normalizeCommentValue(row.summary);
+        return `Reason - ${reason || '—'}`;
+    }
+
+    return '';
+}
+
+function buildGroupedBaseRow(
+    row: ReportRow,
+    serialNo: number | '',
+    woDetailsMap: Map<number, WoDetails>,
+): GroupedLogsSheetRow {
+    const woDetails = resolveWoDetails(row, woDetailsMap);
+    const operator = resolveOperator(row, woDetails);
+    return {
+        'S.No': serialNo,
+        'Log ID': typeof row.logId === 'number' ? row.logId : '',
+        'Log Time': formatGroupedLogDateTime(row.logTime),
+        Action: resolveExportAction(row) || row.label || '',
+        TIME: formatGroupedTime24(row.logTime),
+        PLC: formatSecondsToClock(row.durationSec),
+        JOB: '',
+        OP: operator,
+    };
+}
+
+function buildGroupedExportRows(
+    rows: ReportRow[],
+    woDetailsMap: Map<number, WoDetails>,
+): GroupedExportRow[] {
+    const sortedRows = [...rows].sort((a, b) => a.timestamp - b.timestamp);
+    const exportRows: GroupedExportRow[] = [];
+    let serialNo = 1;
+
+    for (let index = 0; index < sortedRows.length; index += 1) {
+        const row = sortedRows[index];
+        if (!row || row.isWoHeader || row.isPauseBanner) {
+            continue;
+        }
+        if (row.isComputed && !row.isWoSummary) {
+            continue;
+        }
+        if (!row.isWoSummary && !row.action) {
+            continue;
+        }
+
+        const isLogRow = typeof row.logId === 'number';
+        const serial = isLogRow ? serialNo++ : '';
+
+        if (row.isWoSummary && row.woSummaryData) {
+            const summary = row.woSummaryData;
+            exportRows.push({
+                row: {
+                    'S.No': '',
+                    'Log ID': '',
+                    'Log Time': formatGroupedLogDateTime(row.logTime),
+                    Action: `WO #${summary.woIdStr} SUMMARY`,
+                    TIME: `Dur ${summary.totalDuration}`,
+                    PLC: `Cut ${summary.totalCuttingTime} | Pause ${summary.totalPauseTime}`,
+                    JOB: `Jobs ${summary.totalJobs} | Cyc ${summary.totalCycles} | OK ${summary.okQty} | Rej ${summary.rejectQty}`,
+                    OP: summary.operatorName,
+                },
+                style: 'summary',
+            });
+            continue;
+        }
+
+        if (row.action === 'WO_PAUSE') {
+            let resumeIndex = -1;
+            for (let cursor = index + 1; cursor < sortedRows.length; cursor += 1) {
+                const candidate = sortedRows[cursor];
+                if (!candidate || candidate.isWoHeader || candidate.isWoSummary || candidate.isPauseBanner) {
+                    continue;
+                }
+                if (candidate.action === 'WO_RESUME') {
+                    resumeIndex = cursor;
+                    break;
+                }
+                if (candidate.action === 'WO_STOP' || candidate.action === 'WO_START') {
+                    break;
+                }
+            }
+
+            if (resumeIndex > -1) {
+                const resumeRow = sortedRows[resumeIndex]!;
+                const banner = index > 0 && sortedRows[index - 1]?.isPauseBanner
+                    ? sortedRows[index - 1]?.pauseBannerData
+                    : undefined;
+                const hasReasonBlock = Boolean(banner?.reason);
+                const pairId = `pause-${row.rowId}-${resumeRow.rowId}`;
+                const pairStyle: GroupedRowStyle = hasReasonBlock ? 'pausePair' : 'keyPair';
+                const pauseDuration = row.durationSec ?? resumeRow.durationSec;
+                const timeFormatter = hasReasonBlock ? formatGroupedTime12 : formatGroupedTime24;
+                const firstAction = hasReasonBlock ? 'Pause ON' : 'Key OFF';
+                const secondAction = hasReasonBlock ? 'Pause off' : 'Key On';
+                const plcValue = hasReasonBlock
+                    ? formatSecondsToVerbose(pauseDuration)
+                    : formatSecondsToClock(pauseDuration);
+                const pauseReason = resolveGroupedPauseReason(row, woDetailsMap, banner?.reason);
+                const resumeNote = resolveGroupedResumeNote(resumeRow);
+                const commentLines: string[] = [];
+                commentLines.push(`Reason - ${pauseReason || '—'}`);
+                commentLines.push(`Note - ${resumeNote || '—'}`);
+                const jobValue = commentLines.join('\n');
+
+                const pauseBase = buildGroupedBaseRow(row, serial, woDetailsMap);
+                pauseBase.Action = firstAction;
+                pauseBase.TIME = timeFormatter(row.logTime);
+                pauseBase.PLC = plcValue;
+                pauseBase.JOB = jobValue;
+
+                const resumeSerial = typeof resumeRow.logId === 'number' ? serialNo++ : '';
+                const resumeBase = buildGroupedBaseRow(resumeRow, resumeSerial, woDetailsMap);
+                resumeBase.Action = secondAction;
+                resumeBase.TIME = timeFormatter(resumeRow.logTime);
+                resumeBase.PLC = '';
+                resumeBase.JOB = '';
+
+                exportRows.push({
+                    row: pauseBase,
+                    style: pairStyle,
+                    pairId,
+                    mergePlc: true,
+                    mergeJob: true,
+                });
+                exportRows.push({
+                    row: resumeBase,
+                    style: pairStyle,
+                    pairId,
+                });
+
+                index = resumeIndex;
+                continue;
+            }
+        }
+
+        if (row.action === 'SPINDLE_ON') {
+            let offIndex = -1;
+            for (let cursor = index + 1; cursor < sortedRows.length; cursor += 1) {
+                const candidate = sortedRows[cursor];
+                if (!candidate || candidate.isWoHeader || candidate.isWoSummary || candidate.isPauseBanner) {
+                    continue;
+                }
+                if (candidate.action === 'SPINDLE_OFF') {
+                    offIndex = cursor;
+                    break;
+                }
+                if (candidate.action === 'WO_STOP' || candidate.action === 'WO_START') {
+                    break;
+                }
+            }
+
+            if (offIndex > -1) {
+                const offRow = sortedRows[offIndex]!;
+                const pairId = `spindle-${row.rowId}-${offRow.rowId}`;
+                const groupKey = row.jobBlockLabel || offRow.jobBlockLabel || null;
+
+                const onBase = buildGroupedBaseRow(row, serial, woDetailsMap);
+                onBase.Action = 'SPINDLE_ON';
+                onBase.TIME = formatGroupedTime24(row.logTime);
+                onBase.PLC = formatSecondsToClock(offRow.durationSec);
+                onBase.JOB = '';
+
+                const offSerial = typeof offRow.logId === 'number' ? serialNo++ : '';
+                const offBase = buildGroupedBaseRow(offRow, offSerial, woDetailsMap);
+                offBase.Action = 'SPINDLE_OFF';
+                offBase.TIME = formatGroupedTime24(offRow.logTime);
+                offBase.PLC = '';
+                offBase.JOB = '';
+
+                exportRows.push({
+                    row: onBase,
+                    style: 'spindlePair',
+                    pairId,
+                    mergePlc: true,
+                    mergeJob: true,
+                    jobGroupKey: groupKey,
+                });
+                exportRows.push({
+                    row: offBase,
+                    style: 'spindlePair',
+                    pairId,
+                    jobGroupKey: groupKey,
+                });
+
+                index = offIndex;
+                continue;
+            }
+        }
+
+        const base = buildGroupedBaseRow(row, serial, woDetailsMap);
+        const action = resolveExportAction(row);
+        const style: GroupedRowStyle = action === 'WO_START'
+            || action === 'WO_STOP'
+            || action === 'WO_PAUSE'
+            || action === 'WO_RESUME'
+            ? 'yellowAction'
+            : 'default';
+        base.JOB = resolveGroupedWoActionComment(row, woDetailsMap);
+
+        exportRows.push({
+            row: base,
+            style,
+            jobGroupKey: row.jobBlockLabel || null,
+        });
+    }
+
+    for (let index = 0; index < exportRows.length; index += 1) {
+        const groupKey = exportRows[index]?.jobGroupKey?.trim();
+        if (!groupKey) continue;
+
+        let end = index;
+        while (
+            end + 1 < exportRows.length
+            && exportRows[end + 1]?.jobGroupKey?.trim() === groupKey
+        ) {
+            end += 1;
+        }
+
+        exportRows[index]!.isGroupFirst = true;
+        exportRows[end]!.isGroupLast = true;
+
+        const normalizedJobLabel = normalizeGroupedJobLabel(groupKey);
+        let labelIndex = -1;
+        for (let cursor = index; cursor <= end; cursor += 1) {
+            if (!String(exportRows[cursor]?.row.JOB ?? '').trim()) {
+                labelIndex = cursor;
+                break;
+            }
+        }
+        if (labelIndex >= 0) {
+            exportRows[labelIndex]!.row.JOB = normalizedJobLabel;
+        }
+        for (let cursor = index; cursor <= end; cursor += 1) {
+            if (cursor !== labelIndex && exportRows[cursor]?.row.JOB === normalizedJobLabel) {
+                exportRows[cursor]!.row.JOB = '';
+            }
+        }
+
+        index = end;
+    }
+
+    return exportRows;
+}
+
+function applyGroupedHeaderStyle(row: Row): void {
+    row.eachCell((cell) => {
+        cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: LOG_STYLE_COLORS.headerBg },
+        };
+        cell.font = {
+            color: { argb: LOG_STYLE_COLORS.headerText },
+            bold: true,
+            size: 12,
+        };
+        cell.alignment = {
+            horizontal: 'center',
+            vertical: 'middle',
+        };
+        cell.border = {
+            top: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            left: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            bottom: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            right: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+        };
+    });
+}
+
+function applyGroupedDataRowStyle(row: Row, exportRow: GroupedExportRow): void {
+    for (let col = 1; col <= GROUPED_LOG_SHEET_HEADERS.length; col += 1) {
+        const cell = row.getCell(col);
+        cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: LOG_STYLE_COLORS.defaultBg },
+        };
+        cell.font = {
+            color: { argb: LOG_STYLE_COLORS.darkText },
+        };
+        cell.alignment = {
+            vertical: 'middle',
+            horizontal: col === 3 || col === 8 ? 'left' : 'center',
+            wrapText: col === 7,
+        };
+
+        const thinBorder = { style: 'thin' as const, color: { argb: LOG_STYLE_COLORS.gridLine } };
+        const thickBorder = { style: 'thick' as const, color: { argb: LOG_STYLE_COLORS.groupedOutline } };
+        cell.border = {
+            top: exportRow.jobGroupKey && exportRow.isGroupFirst ? thickBorder : thinBorder,
+            bottom: exportRow.jobGroupKey && exportRow.isGroupLast ? thickBorder : thinBorder,
+            left: exportRow.jobGroupKey && col === 1 ? thickBorder : thinBorder,
+            right: exportRow.jobGroupKey && col === GROUPED_LOG_SHEET_HEADERS.length ? thickBorder : thinBorder,
+        };
+    }
+
+    if (exportRow.style === 'yellowAction') {
+        const actionCell = row.getCell(4);
+        actionCell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: LOG_STYLE_COLORS.groupedYellow },
+        };
+        actionCell.font = { color: { argb: LOG_STYLE_COLORS.darkText }, bold: true };
+    }
+
+    if (exportRow.style === 'spindlePair') {
+        for (const col of [4, 5, 6]) {
+            const cell = row.getCell(col);
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: LOG_STYLE_COLORS.groupedGreen },
+            };
+        }
+        row.getCell(4).font = { color: { argb: LOG_STYLE_COLORS.darkText }, bold: true };
+    }
+
+    if (exportRow.style === 'keyPair') {
+        for (const col of [4, 5, 6, 7]) {
+            const cell = row.getCell(col);
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: LOG_STYLE_COLORS.groupedBeige },
+            };
+        }
+    }
+
+    if (exportRow.style === 'pausePair') {
+        for (const col of [4, 5, 6, 7]) {
+            const cell = row.getCell(col);
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: LOG_STYLE_COLORS.groupedOrange },
+            };
+        }
+    }
+
+    if (exportRow.style === 'summary') {
+        for (let col = 1; col <= GROUPED_LOG_SHEET_HEADERS.length; col += 1) {
+            const cell = row.getCell(col);
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: LOG_STYLE_COLORS.groupedSummaryBg },
+            };
+            cell.font = {
+                color: { argb: LOG_STYLE_COLORS.whiteText },
+                bold: true,
+            };
+            cell.alignment = {
+                vertical: 'middle',
+                horizontal: col === 3 || col === 8 ? 'left' : 'center',
+                wrapText: true,
+            };
+        }
+        row.height = 24;
+    }
+}
+
+function applyGroupedPairMerges(worksheet: Worksheet, rows: GroupedExportRow[]): void {
+    for (let index = 0; index < rows.length - 1; index += 1) {
+        const current = rows[index];
+        const next = rows[index + 1];
+        if (!current || !next || !current.pairId || current.pairId !== next.pairId) {
+            continue;
+        }
+        if (!current.rowNumber || !next.rowNumber) {
+            continue;
+        }
+
+        if (current.mergePlc && current.row.PLC) {
+            worksheet.mergeCells(`F${current.rowNumber}:F${next.rowNumber}`);
+            worksheet.getCell(`F${current.rowNumber}`).alignment = {
+                vertical: 'middle',
+                horizontal: 'center',
+                wrapText: true,
+            };
+        }
+
+        if (current.mergeJob && current.row.JOB) {
+            worksheet.mergeCells(`G${current.rowNumber}:G${next.rowNumber}`);
+            worksheet.getCell(`G${current.rowNumber}`).alignment = {
+                vertical: 'middle',
+                horizontal: 'center',
+                wrapText: true,
+            };
+        }
+    }
+}
+
+function addGroupedLogsSheet(workbook: Workbook, input: ExcelExportInput): void {
+    const worksheet = workbook.addWorksheet('Logs Grouped');
+    worksheet.columns = GROUPED_LOG_SHEET_HEADERS.map((header, index) => ({
+        header,
+        key: header,
+        width: GROUPED_LOG_SHEET_COLUMN_WIDTHS[index] ?? 14,
+    }));
+
+    worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+    worksheet.autoFilter = {
+        from: 'A1',
+        to: `${toExcelColumnName(GROUPED_LOG_SHEET_HEADERS.length)}1`,
+    };
+
+    const headerRow = worksheet.getRow(1);
+    applyGroupedHeaderStyle(headerRow);
+    headerRow.height = 26;
+
+    const groupedRows = buildGroupedExportRows(input.rows, input.woDetailsMap);
+    for (const exportRow of groupedRows) {
+        const worksheetRow = worksheet.addRow(exportRow.row);
+        exportRow.rowNumber = worksheetRow.number;
+        applyGroupedDataRowStyle(worksheetRow, exportRow);
+    }
+
+    applyGroupedPairMerges(worksheet, groupedRows);
+}
+
 export function mapReportRowToLogsSheetRow(
     row: ReportRow,
     woDetailsMap: Map<number, WoDetails>,
@@ -1271,11 +1862,19 @@ export async function buildExcelWorkbook(input: ExcelExportInput): Promise<Workb
     return workbook;
 }
 
-export async function exportToExcel(input: ExcelExportInput): Promise<void> {
-    const filename = input.filename || 'device_report.xlsx';
-    const workbook = await buildExcelWorkbook(input);
-    const buffer = await workbook.xlsx.writeBuffer();
+export async function buildGroupedExcelWorkbook(input: ExcelExportInput): Promise<Workbook> {
+    const WorkbookClass = await getWorkbookCtor();
+    const workbook = new WorkbookClass();
+    workbook.created = new Date();
+    workbook.modified = new Date();
 
+    addGroupedLogsSheet(workbook, input);
+
+    return workbook;
+}
+
+async function downloadWorkbook(workbook: Workbook, filename: string): Promise<void> {
+    const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer as BlobPart], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
@@ -1288,6 +1887,18 @@ export async function exportToExcel(input: ExcelExportInput): Promise<void> {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+}
+
+export async function exportToExcel(input: ExcelExportInput): Promise<void> {
+    const filename = input.filename || 'device_report.xlsx';
+    const workbook = await buildExcelWorkbook(input);
+    await downloadWorkbook(workbook, filename);
+}
+
+export async function exportToGroupedExcel(input: ExcelExportInput): Promise<void> {
+    const filename = input.filename || 'device_report_grouped.xlsx';
+    const workbook = await buildGroupedExcelWorkbook(input);
+    await downloadWorkbook(workbook, filename);
 }
 
 export interface PdfExportInput {

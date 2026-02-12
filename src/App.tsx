@@ -10,6 +10,7 @@ export default function App() {
         <Router>
             <Routes>
                 <Route path="/" element={<ProductionHub />} />
+                <Route path="/dashboard" element={<ProductionHubV2 />} />
                 <Route path="/report" element={<ReportPage />} />
                 <Route path="/hub-v2" element={<ProductionHubV2 />} />
                 <Route path="/report-v2" element={<ReportPageV2 />} />

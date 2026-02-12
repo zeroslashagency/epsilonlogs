@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GROUPED_LOG_SHEET_HEADERS,
   LOG_SHEET_HEADERS,
   LOG_STYLE_COLORS,
   buildExcelWorkbook,
+  buildGroupedExcelWorkbook,
   computePdfCanvasSlices,
   computePdfPageSlices,
   mapReportRowToLogsSheetRow,
@@ -538,6 +540,179 @@ describe('report workbook structure', () => {
     expect(logsSheet?.getCell('C2').value).toBe(String(leftCell?.value || ''));
     expect(logsSheet?.getCell('F2').value).toBe(String(centerCell?.value || ''));
     expect(logsSheet?.getCell('I2').value).toBe(String(rightCell?.value || ''));
+  });
+});
+
+describe('grouped workbook structure', () => {
+  it('keeps grouped sheet header order with OP column', async () => {
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [],
+      stats: makeStats(),
+      woDetailsMap: new Map(),
+      deviceNameMap: new Map(),
+    });
+
+    const groupedSheet = workbook.getWorksheet('Logs Grouped');
+    expect(groupedSheet).toBeDefined();
+
+    const headerValues = groupedSheet?.getRow(1).values as Array<string | undefined>;
+    expect(headerValues.slice(1, GROUPED_LOG_SHEET_HEADERS.length + 1)).toEqual(GROUPED_LOG_SHEET_HEADERS);
+  });
+
+  it('shows JOB label once per group and merges PLC/JOB for spindle pairs', async () => {
+    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails()]]);
+    const deviceNameMap = new Map<number, string>([[15, 'VMC - 05']]);
+
+    const spindleOn = makeEventRow({
+      rowId: 'log-3100',
+      sNo: 10,
+      logId: 3100,
+      logTime: new Date('2026-02-10T13:57:48'),
+      action: 'SPINDLE_ON',
+      label: 'JOB - 01',
+      jobBlockLabel: 'JOB - 01',
+      timestamp: new Date('2026-02-10T13:57:48').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 3100,
+        action: 'SPINDLE_ON',
+      },
+    });
+    const spindleOff = makeEventRow({
+      rowId: 'log-3101',
+      sNo: 11,
+      logId: 3101,
+      logTime: new Date('2026-02-10T14:17:42'),
+      action: 'SPINDLE_OFF',
+      label: 'JOB - 01',
+      durationSec: 1194,
+      durationText: '19 min 54 sec',
+      jobBlockLabel: 'JOB - 01',
+      timestamp: new Date('2026-02-10T14:17:42').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 3101,
+        action: 'SPINDLE_OFF',
+      },
+    });
+
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [spindleOn, spindleOff],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap,
+    });
+
+    const groupedSheet = workbook.getWorksheet('Logs Grouped');
+    expect(groupedSheet).toBeDefined();
+
+    expect(groupedSheet?.getCell('D2').value).toBe('SPINDLE_ON');
+    expect(groupedSheet?.getCell('D3').value).toBe('SPINDLE_OFF');
+    expect(groupedSheet?.getCell('F2').value).toBe('0:19:54');
+    expect(groupedSheet?.getCell('F3').value).toBe('0:19:54');
+    expect(groupedSheet?.getCell('G2').value).toBe('JOB 1');
+    expect(groupedSheet?.getCell('G3').value).toBe('JOB 1');
+
+    const topBorder = groupedSheet?.getCell('A2').border?.top;
+    const bottomBorder = groupedSheet?.getCell('A3').border?.bottom;
+    expect(topBorder?.style).toBe('thick');
+    expect(bottomBorder?.style).toBe('thick');
+  });
+
+  it('includes comments for WO_START, WO_PAUSE, WO_RESUME and WO_STOP in grouped export', async () => {
+    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails({
+      start_comment: 'Machine starting',
+      stop_comment: 'Job completed',
+    })]]);
+    const deviceNameMap = new Map<number, string>([[15, 'VMC - 05']]);
+
+    const woStart = makeEventRow({
+      rowId: 'log-4001',
+      sNo: 1,
+      logId: 4001,
+      logTime: new Date('2026-02-10T13:40:00'),
+      action: 'WO_START',
+      timestamp: new Date('2026-02-10T13:40:00').getTime(),
+      startRowData: {
+        partNo: 'MET002',
+        allotted: 57,
+        comment: 'Machine starting',
+      },
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 4001,
+        action: 'WO_START',
+        start_comment: 'Machine starting',
+      },
+    });
+
+    const woPause = makeEventRow({
+      rowId: 'log-4002',
+      sNo: 2,
+      logId: 4002,
+      logTime: new Date('2026-02-10T13:50:04'),
+      action: 'WO_PAUSE',
+      durationSec: 650,
+      durationText: '10 min 50 sec',
+      summary: 'Lunch break',
+      timestamp: new Date('2026-02-10T13:50:04').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 4002,
+        action: 'WO_PAUSE',
+        start_comment: 'Lunch break',
+      },
+    });
+
+    const woResume = makeEventRow({
+      rowId: 'log-4003',
+      sNo: 3,
+      logId: 4003,
+      logTime: new Date('2026-02-10T14:00:54'),
+      action: 'WO_RESUME',
+      summary: 'Missed Again',
+      timestamp: new Date('2026-02-10T14:00:54').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 4003,
+        action: 'WO_RESUME',
+      },
+    });
+
+    const woStop = makeEventRow({
+      rowId: 'log-4004',
+      sNo: 4,
+      logId: 4004,
+      logTime: new Date('2026-02-10T14:01:19'),
+      action: 'WO_STOP',
+      timestamp: new Date('2026-02-10T14:01:19').getTime(),
+      stopRowData: {
+        ok: 63,
+        reject: 0,
+        reason: 'Job completed',
+      },
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 4004,
+        action: 'WO_STOP',
+        stop_comment: 'Job completed',
+      },
+    });
+
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [woStart, woPause, woResume, woStop],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap,
+    });
+
+    const groupedSheet = workbook.getWorksheet('Logs Grouped');
+    expect(groupedSheet).toBeDefined();
+
+    expect(String(groupedSheet?.getCell('G2').value || '')).toContain('Comment - Machine starting');
+    expect(String(groupedSheet?.getCell('G3').value || '')).toContain('Reason - Lunch break');
+    expect(String(groupedSheet?.getCell('G3').value || '')).toContain('Note - Missed Again');
+    expect(String(groupedSheet?.getCell('G5').value || '')).toContain('Reason - Job completed');
   });
 });
 

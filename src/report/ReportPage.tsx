@@ -27,6 +27,7 @@ export default function ReportPage() {
     const [woDetailsMap, setWoDetailsMap] = useState<Map<number, WoDetails>>(new Map());
     const [deviceNameMap, setDeviceNameMap] = useState<Map<number, string>>(new Map());
     const [error, setError] = useState<string | null>(null);
+    const [exportingGroupedExcel, setExportingGroupedExcel] = useState(false);
     const reportExportRef = useRef<HTMLDivElement | null>(null);
 
     const handleGenerate = async () => {
@@ -159,6 +160,32 @@ export default function ReportPage() {
                                 >
                                     <Download className="h-4 w-4" />
                                     Export Excel
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            setExportingGroupedExcel(true);
+                                            const { exportToGroupedExcel } = await import('./export-utils');
+                                            if (!stats) return;
+                                            await exportToGroupedExcel({
+                                                rows,
+                                                stats,
+                                                woDetailsMap,
+                                                deviceNameMap,
+                                                reportConfig: config,
+                                            });
+                                        } catch (err: unknown) {
+                                            const message = err instanceof Error ? err.message : 'Grouped Excel export failed.';
+                                            setError(message);
+                                        } finally {
+                                            setExportingGroupedExcel(false);
+                                        }
+                                    }}
+                                    disabled={exportingGroupedExcel}
+                                    className="flex items-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded-lg hover:bg-cyan-700 transition-colors text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                    {exportingGroupedExcel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                                    {exportingGroupedExcel ? 'Exporting Grouped...' : 'Export Excel Grouped'}
                                 </button>
                                 <button
                                     onClick={async () => {
