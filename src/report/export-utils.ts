@@ -157,6 +157,7 @@ interface GroupedExportRow {
     mergePlc?: boolean;
     mergeJob?: boolean;
     mergeNotes?: boolean;
+    includeInSerial?: boolean;
     jobGroupKey?: string | null;
     isGroupFirst?: boolean;
     isGroupLast?: boolean;
@@ -942,6 +943,47 @@ function resolveGroupedSpindleOffNote(row: ReportRow): string {
         || formatSecondsToVerbose(row.durationSec);
 }
 
+function toNumberOrNull(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const parsed = Number(value.trim());
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+    return null;
+}
+
+function resolveGroupedJobTypeCode(row: ReportRow, woDetailsMap: Map<number, WoDetails>): number | null {
+    const fromLog = toNumberOrNull(row.originalLog?.job_type);
+    if (fromLog !== null) {
+        return fromLog;
+    }
+
+    const woDetails = resolveWoDetails(row, woDetailsMap);
+    const fromWo = toNumberOrNull(woDetails?.job_type);
+    if (fromWo !== null) {
+        return fromWo;
+    }
+
+    return null;
+}
+
+function resolveGroupedKeyActionLabel(row: ReportRow, woDetailsMap: Map<number, WoDetails>, isOn: boolean): string {
+    const code = resolveGroupedJobTypeCode(row, woDetailsMap);
+    const suffix = isOn ? 'ON' : 'OFF';
+
+    if (code === 2) return `Setting ${suffix}`;
+    if (code === 3) return `Calibration ${suffix}`;
+    if (code === 4) return `Maintenance ${suffix}`;
+    if (code === 5) return `Man ${suffix}`;
+    if (code === 6) return `Training ${suffix}`;
+
+    return `KEY_${suffix}`;
+}
+
 function formatSecondsToJobLoadingText(seconds: number): string {
     const total = Math.max(0, Math.round(seconds));
     const hours = Math.floor(total / 3600);
@@ -1018,6 +1060,7 @@ function buildGroupedExportRows(
     const sortedRows = [...rows].sort((a, b) => a.timestamp - b.timestamp);
     const exportRows: GroupedExportRow[] = [];
     let serialNo = 1;
+    let pendingWoStop: ReportRow | null = null;
 
     for (let index = 0; index < sortedRows.length; index += 1) {
         const row = sortedRows[index];
@@ -1032,7 +1075,38 @@ function buildGroupedExportRows(
         }
 
         const isLogRow = typeof row.logId === 'number';
-        const serial = isLogRow ? serialNo++ : '';
+        let serial: number | '' = isLogRow ? serialNo++ : '';
+        const action = resolveExportAction(row);
+
+        if (action === 'WO_START' && pendingWoStop && row.timestamp > pendingWoStop.timestamp) {
+            const idealSerial = typeof serial === 'number' ? serial : serialNo++;
+            if (typeof serial === 'number') {
+                serial = serialNo++;
+            }
+
+            const idealGapSec = Math.max(0, Math.round((row.timestamp - pendingWoStop.timestamp) / 1000));
+            const stopDetails = resolveWoDetails(pendingWoStop, woDetailsMap);
+            const startDetails = resolveWoDetails(row, woDetailsMap);
+            const idealOperator = resolveOperator(pendingWoStop, stopDetails)
+                || resolveOperator(row, startDetails);
+
+            exportRows.push({
+                row: {
+                    'S.No': idealSerial,
+                    'Log ID': '',
+                    'Log Time': formatGroupedLogDateTime(row.logTime),
+                    Action: 'IDEAL TIME',
+                    TIME: '',
+                    PLC: formatSecondsToClock(idealGapSec),
+                    JOB: '',
+                    Notes: 'Gap between previous WO_STOP and WO_START',
+                    OP: idealOperator,
+                },
+                style: 'yellowAction',
+                includeInSerial: true,
+            });
+            pendingWoStop = null;
+        }
 
         if (row.isWoSummary && row.woSummaryData) {
             const summary = row.woSummaryData;
@@ -1143,7 +1217,7 @@ function buildGroupedExportRows(
                 const keyOffRow = sortedRows[keyOffIndex]!;
                 const onSerial = typeof row.logId === 'number' ? serialNo++ : '';
                 const onBase = buildGroupedBaseRow(row, onSerial, woDetailsMap);
-                onBase.Action = 'KEY_ON';
+                onBase.Action = resolveGroupedKeyActionLabel(row, woDetailsMap, true);
                 onBase.TIME = formatGroupedTime24(row.logTime);
                 onBase.PLC = '';
                 onBase.JOB = '';
@@ -1151,7 +1225,7 @@ function buildGroupedExportRows(
 
                 const offSerial = typeof keyOffRow.logId === 'number' ? serialNo++ : '';
                 const offBase = buildGroupedBaseRow(keyOffRow, offSerial, woDetailsMap);
-                offBase.Action = 'KEY_OFF';
+                offBase.Action = resolveGroupedKeyActionLabel(row, woDetailsMap, false);
                 offBase.TIME = formatGroupedTime24(keyOffRow.logTime);
                 offBase.PLC = '';
                 offBase.JOB = '';
@@ -1317,7 +1391,6 @@ function buildGroupedExportRows(
         }
 
         const base = buildGroupedBaseRow(row, serial, woDetailsMap);
-        const action = resolveExportAction(row);
         const style: GroupedRowStyle = action === 'WO_START'
             || action === 'WO_STOP'
             || action === 'WO_PAUSE'
@@ -1337,6 +1410,12 @@ function buildGroupedExportRows(
             style,
             jobGroupKey: row.jobBlockLabel || null,
         });
+
+        if (action === 'WO_STOP') {
+            pendingWoStop = row;
+        } else if (action === 'WO_START') {
+            pendingWoStop = null;
+        }
     }
 
     for (let index = 0; index < exportRows.length; index += 1) {
@@ -1382,14 +1461,14 @@ function buildGroupedExportRows(
             previousOperator = op;
             continue;
         }
-        if ((action === 'KEY_ON' || action === 'KEY_OFF') && previousOperator) {
+        if (exportRow.style === 'keyActionBlue' && previousOperator) {
             exportRow.row.OP = previousOperator;
         }
     }
 
     let displaySerial = 1;
     for (const exportRow of exportRows) {
-        if (typeof exportRow.row['Log ID'] === 'number') {
+        if (exportRow.includeInSerial || typeof exportRow.row['Log ID'] === 'number') {
             exportRow.row['S.No'] = displaySerial;
             displaySerial += 1;
         } else {
@@ -1463,7 +1542,7 @@ function applyGroupedDataRowStyle(row: Row, exportRow: GroupedExportRow): void {
     }
 
     if (exportRow.style === 'spindlePair') {
-        for (const col of [4, 5, 6]) {
+        for (const col of [4, 5, 6, 7, 8]) {
             const cell = row.getCell(col);
             cell.fill = {
                 type: 'pattern',
@@ -1486,7 +1565,7 @@ function applyGroupedDataRowStyle(row: Row, exportRow: GroupedExportRow): void {
     }
 
     if (exportRow.style === 'pausePair') {
-        for (const col of [4, 5, 6, 7]) {
+        for (const col of [4, 5, 6, 7, 8]) {
             const cell = row.getCell(col);
             cell.fill = {
                 type: 'pattern',
@@ -1609,39 +1688,94 @@ function addGroupedEndSummaryBlock(worksheet: Worksheet, input: ExcelExportInput
     const blockStartRow = worksheet.rowCount + 2;
     const range = resolveGroupedSummaryRange(input.rows, input.reportConfig);
 
-    const summaryLines: Array<{ label: string; value?: string }> = [
-        { label: 'End Summary Block' },
-        { label: 'Start Time', value: range.startText },
-        { label: 'End Time', value: range.endText },
-        { label: 'Generate Report' },
-        { label: 'Total Time Selected for reports', value: formatSecondsToClockPadded(input.stats.totalWoDurationSec) },
-        { label: 'Total Cutting Run Time', value: formatSecondsToClockPadded(input.stats.totalCuttingSec) },
-        { label: 'Loading unloading Time', value: formatSecondsToClockPadded(input.stats.totalLoadingUnloadingSec) },
-        { label: 'Total Pause Time', value: formatSecondsToClockPadded(input.stats.totalPauseSec) },
-        { label: 'Others', value: formatSecondsToClockPadded(input.stats.totalIdleSec) },
+    const totalSelectedSec = Math.max(0, Math.round(input.stats.totalWoDurationSec || 0));
+    const cuttingSec = Math.max(0, Math.round(input.stats.totalCuttingSec || 0));
+    const loadingSec = Math.max(0, Math.round(input.stats.totalLoadingUnloadingSec || 0));
+    const pauseSec = Math.max(0, Math.round(input.stats.totalPauseSec || 0));
+    const othersSec = Math.max(0, Math.round(input.stats.totalIdleSec || 0));
+    const remainingSec = Math.max(0, totalSelectedSec - (cuttingSec + loadingSec + pauseSec + othersSec));
+
+    const toPct = (seconds: number): string => {
+        if (totalSelectedSec <= 0) return '0.0%';
+        return `${((seconds / totalSelectedSec) * 100).toFixed(1)}%`;
+    };
+
+    const toBar = (seconds: number): string => {
+        const pct = totalSelectedSec > 0 ? (seconds / totalSelectedSec) : 0;
+        const filled = Math.max(0, Math.min(20, Math.round(pct * 20)));
+        return `${'#'.repeat(filled)}${'-'.repeat(20 - filled)}`;
+    };
+
+    const leftLines: Array<{ text: string; bold?: boolean }> = [
+        { text: `Start Time : ${range.startText}` },
+        { text: `End Time   : ${range.endText}` },
+        { text: 'Generate Report', bold: true },
+        { text: `Total Time Selected for reports : ${formatSecondsToClockPadded(totalSelectedSec)}` },
+        { text: `Total Cutting Run Time          : ${formatSecondsToClockPadded(cuttingSec)}` },
+        { text: `Loading unloading Time          : ${formatSecondsToClockPadded(loadingSec)}` },
+        { text: `Total Pause Time                : ${formatSecondsToClockPadded(pauseSec)}` },
+        { text: `Others                          : ${formatSecondsToClockPadded(othersSec)}` },
     ];
 
-    for (let offset = 0; offset < summaryLines.length; offset += 1) {
-        const rowNumber = blockStartRow + offset;
-        const line = summaryLines[offset]!;
+    const rightLines = [
+        `Cutting   : ${toPct(cuttingSec)} (${formatSecondsToClockPadded(cuttingSec)})`,
+        `Loading   : ${toPct(loadingSec)} (${formatSecondsToClockPadded(loadingSec)})`,
+        `Pause     : ${toPct(pauseSec)} (${formatSecondsToClockPadded(pauseSec)})`,
+        `Others    : ${toPct(othersSec)} (${formatSecondsToClockPadded(othersSec)})`,
+        `Remaining : ${toPct(remainingSec)} (${formatSecondsToClockPadded(remainingSec)})`,
+    ];
+
+    worksheet.mergeCells(`A${blockStartRow}:I${blockStartRow}`);
+    const titleCell = worksheet.getCell(`A${blockStartRow}`);
+    titleCell.value = 'End Summary Block';
+    titleCell.font = { bold: true, color: { argb: LOG_STYLE_COLORS.whiteText } };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOG_STYLE_COLORS.groupedSummaryBg } };
+    titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    for (let i = 0; i < leftLines.length; i += 1) {
+        const rowNumber = blockStartRow + 1 + i;
         worksheet.mergeCells(`A${rowNumber}:F${rowNumber}`);
-        worksheet.getCell(`A${rowNumber}`).value = line.label;
-        worksheet.getCell(`A${rowNumber}`).font = {
-            bold: offset === 0 || line.label === 'Generate Report',
-            color: { argb: LOG_STYLE_COLORS.darkText },
-        };
-        worksheet.getCell(`A${rowNumber}`).alignment = {
-            vertical: 'middle',
-            horizontal: 'left',
-        };
+        const leftCell = worksheet.getCell(`A${rowNumber}`);
+        leftCell.value = leftLines[i]!.text;
+        leftCell.font = { bold: Boolean(leftLines[i]!.bold), color: { argb: LOG_STYLE_COLORS.darkText } };
+        leftCell.alignment = { vertical: 'middle', horizontal: 'left' };
 
         worksheet.mergeCells(`G${rowNumber}:I${rowNumber}`);
-        worksheet.getCell(`G${rowNumber}`).value = line.value ? `: ${line.value}` : '';
-        worksheet.getCell(`G${rowNumber}`).alignment = {
-            vertical: 'middle',
-            horizontal: 'left',
-        };
+        const rightCell = worksheet.getCell(`G${rowNumber}`);
+        rightCell.value = rightLines[i] || '';
+        rightCell.font = { color: { argb: LOG_STYLE_COLORS.darkText } };
+        rightCell.alignment = { vertical: 'middle', horizontal: 'left' };
+        rightCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOG_STYLE_COLORS.keyActionBg } };
+    }
 
+    const chartTitleRow = blockStartRow + 1 + leftLines.length + 1;
+    worksheet.mergeCells(`A${chartTitleRow}:I${chartTitleRow}`);
+    const chartTitleCell = worksheet.getCell(`A${chartTitleRow}`);
+    chartTitleCell.value = 'Bottom Chart';
+    chartTitleCell.font = { bold: true, color: { argb: LOG_STYLE_COLORS.darkText } };
+    chartTitleCell.alignment = { vertical: 'middle', horizontal: 'left' };
+
+    const chartRows = [
+        { label: 'Cutting', sec: cuttingSec, color: LOG_STYLE_COLORS.groupedGreen },
+        { label: 'Loading', sec: loadingSec, color: LOG_STYLE_COLORS.groupedLightBlue },
+        { label: 'Pause', sec: pauseSec, color: LOG_STYLE_COLORS.groupedOrange },
+        { label: 'Others', sec: othersSec, color: LOG_STYLE_COLORS.groupedBeige },
+        { label: 'Remaining', sec: remainingSec, color: LOG_STYLE_COLORS.sectionHeader },
+    ];
+
+    for (let i = 0; i < chartRows.length; i += 1) {
+        const rowNumber = chartTitleRow + 1 + i;
+        const item = chartRows[i]!;
+        worksheet.mergeCells(`A${rowNumber}:I${rowNumber}`);
+        const cell = worksheet.getCell(`A${rowNumber}`);
+        cell.value = `${item.label.padEnd(10, ' ')} ${toBar(item.sec)} ${toPct(item.sec)} (${formatSecondsToClockPadded(item.sec)})`;
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: item.color } };
+        cell.font = { color: { argb: LOG_STYLE_COLORS.darkText } };
+    }
+
+    const finalRow = chartTitleRow + 1 + chartRows.length;
+    for (let rowNumber = blockStartRow; rowNumber <= finalRow; rowNumber += 1) {
         for (let col = 1; col <= GROUPED_LOG_SHEET_HEADERS.length; col += 1) {
             const cell = worksheet.getCell(`${toExcelColumnName(col)}${rowNumber}`);
             cell.border = {

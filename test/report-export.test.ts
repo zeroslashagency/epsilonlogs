@@ -884,6 +884,53 @@ describe('grouped workbook structure', () => {
     expect(opFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.defaultBg);
   });
 
+  it('maps key action labels by non-production job type', async () => {
+    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails({ job_type: 3 })]]);
+    const deviceNameMap = new Map<number, string>([[15, 'VMC - 05']]);
+
+    const keyOn = makeEventRow({
+      rowId: 'log-6001',
+      logId: 6001,
+      logTime: new Date('2026-02-13T20:11:41'),
+      action: 'KEY_ON',
+      timestamp: new Date('2026-02-13T20:11:41').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 6001,
+        action: 'KEY_ON',
+        job_type: '3',
+      },
+    });
+
+    const keyOff = makeEventRow({
+      rowId: 'log-6002',
+      logId: 6002,
+      logTime: new Date('2026-02-13T20:19:00'),
+      action: 'KEY_OFF',
+      timestamp: new Date('2026-02-13T20:19:00').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 6002,
+        action: 'KEY_OFF',
+        job_type: '3',
+      },
+    });
+
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [keyOn, keyOff],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap,
+    });
+
+    const groupedSheet = workbook.getWorksheet('Logs Grouped');
+    expect(groupedSheet).toBeDefined();
+    expect(groupedSheet?.getCell('D2').value).toBe('Calibration ON');
+    expect(groupedSheet?.getCell('D3').value).toBe('Calibration OFF');
+    expect(groupedSheet?.getCell('H2').value).toBe('Total Spindle Run Time:');
+    expect(groupedSheet?.getCell('H3').value).toBe('7m 19s');
+  });
+
   it('backfills OP for KEY rows from previous operator when missing', async () => {
     const woDetailsMap = new Map<number, WoDetails>();
     const deviceNameMap = new Map<number, string>();
@@ -971,6 +1018,99 @@ describe('grouped workbook structure', () => {
     expect(groupedSheet?.getCell('I5').value).toBe('PALANISAMY');
   });
 
+  it('inserts IDEAL TIME row before WO_START using previous WO_STOP gap', async () => {
+    const woDetailsMap = new Map<number, WoDetails>();
+    const deviceNameMap = new Map<number, string>();
+
+    const woStop = makeEventRow({
+      rowId: 'log-7001',
+      logId: 7001,
+      logTime: new Date('2026-02-13T22:01:26'),
+      action: 'WO_STOP',
+      operatorName: 'PALANISAMY',
+      timestamp: new Date('2026-02-13T22:01:26').getTime(),
+      stopRowData: {
+        ok: 3,
+        reject: 0,
+        reason: 'Setting complete',
+      },
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 7001,
+        action: 'WO_STOP',
+        start_name: 'PALANISAMY',
+      },
+    });
+
+    const keyOn = makeEventRow({
+      rowId: 'log-7002',
+      logId: 7002,
+      logTime: new Date('2026-02-13T22:19:52'),
+      action: 'KEY_ON',
+      operatorName: 'PALANISAMY',
+      timestamp: new Date('2026-02-13T22:19:52').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 7002,
+        action: 'KEY_ON',
+        start_name: 'PALANISAMY',
+      },
+    });
+
+    const keyOff = makeEventRow({
+      rowId: 'log-7003',
+      logId: 7003,
+      logTime: new Date('2026-02-13T22:19:53'),
+      action: 'KEY_OFF',
+      operatorName: 'PALANISAMY',
+      timestamp: new Date('2026-02-13T22:19:53').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 7003,
+        action: 'KEY_OFF',
+        start_name: 'PALANISAMY',
+      },
+    });
+
+    const woStart = makeEventRow({
+      rowId: 'log-7004',
+      logId: 7004,
+      logTime: new Date('2026-02-13T22:22:29'),
+      action: 'WO_START',
+      operatorName: 'RamaKrishnan',
+      timestamp: new Date('2026-02-13T22:22:29').getTime(),
+      startRowData: {
+        partNo: 'MET002',
+        allotted: 10,
+        comment: 'Started @1025',
+      },
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 7004,
+        action: 'WO_START',
+        start_name: 'RamaKrishnan',
+      },
+    });
+
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [woStop, keyOn, keyOff, woStart],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap,
+    });
+
+    const groupedSheet = workbook.getWorksheet('Logs Grouped');
+    expect(groupedSheet).toBeDefined();
+
+    expect(groupedSheet?.getCell('D5').value).toBe('IDEAL TIME');
+    expect(groupedSheet?.getCell('F5').value).toBe('0:21:03');
+    expect(groupedSheet?.getCell('H5').value).toBe('Gap between previous WO_STOP and WO_START');
+    expect(groupedSheet?.getCell('I5').value).toBe('PALANISAMY');
+    expect(groupedSheet?.getCell('D6').value).toBe('WO_START');
+    expect(groupedSheet?.getCell('A5').value).toBe(4);
+    expect(groupedSheet?.getCell('A6').value).toBe(5);
+  });
+
   it('appends end summary block in grouped sheet footer', async () => {
     const workbook = await buildGroupedExcelWorkbook({
       rows: [],
@@ -988,21 +1128,21 @@ describe('grouped workbook structure', () => {
     expect(groupedSheet).toBeDefined();
 
     expect(groupedSheet?.getCell('A3').value).toBe('End Summary Block');
-    expect(groupedSheet?.getCell('A4').value).toBe('Start Time');
-    expect(groupedSheet?.getCell('G4').value).toBe(': 09/02/2026, 11:00 AM');
-    expect(groupedSheet?.getCell('A5').value).toBe('End Time');
-    expect(groupedSheet?.getCell('G5').value).toBe(': 09/02/2026, 05:00 PM');
+    expect(groupedSheet?.getCell('A4').value).toBe('Start Time : 09/02/2026, 11:00 AM');
+    expect(groupedSheet?.getCell('A5').value).toBe('End Time   : 09/02/2026, 05:00 PM');
     expect(groupedSheet?.getCell('A6').value).toBe('Generate Report');
-    expect(groupedSheet?.getCell('A7').value).toBe('Total Time Selected for reports');
-    expect(groupedSheet?.getCell('G7').value).toBe(': 00:04:20');
-    expect(groupedSheet?.getCell('A8').value).toBe('Total Cutting Run Time');
-    expect(groupedSheet?.getCell('G8').value).toBe(': 00:03:20');
-    expect(groupedSheet?.getCell('A9').value).toBe('Loading unloading Time');
-    expect(groupedSheet?.getCell('G9').value).toBe(': 00:00:20');
-    expect(groupedSheet?.getCell('A10').value).toBe('Total Pause Time');
-    expect(groupedSheet?.getCell('G10').value).toBe(': 00:00:30');
-    expect(groupedSheet?.getCell('A11').value).toBe('Others');
-    expect(groupedSheet?.getCell('G11').value).toBe(': 00:00:10');
+    expect(groupedSheet?.getCell('A7').value).toBe('Total Time Selected for reports : 00:04:20');
+    expect(groupedSheet?.getCell('A8').value).toBe('Total Cutting Run Time          : 00:03:20');
+    expect(groupedSheet?.getCell('A9').value).toBe('Loading unloading Time          : 00:00:20');
+    expect(groupedSheet?.getCell('A10').value).toBe('Total Pause Time                : 00:00:30');
+    expect(groupedSheet?.getCell('A11').value).toBe('Others                          : 00:00:10');
+    expect(groupedSheet?.getCell('G4').value).toBe('Cutting   : 76.9% (00:03:20)');
+    expect(groupedSheet?.getCell('G5').value).toBe('Loading   : 7.7% (00:00:20)');
+    expect(groupedSheet?.getCell('G6').value).toBe('Pause     : 11.5% (00:00:30)');
+    expect(groupedSheet?.getCell('G7').value).toBe('Others    : 3.8% (00:00:10)');
+    expect(groupedSheet?.getCell('G8').value).toBe('Remaining : 0.0% (00:00:00)');
+    expect(groupedSheet?.getCell('A13').value).toBe('Bottom Chart');
+    expect(String(groupedSheet?.getCell('A14').value || '')).toContain('Cutting');
   });
 });
 
