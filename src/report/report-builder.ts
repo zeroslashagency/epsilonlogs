@@ -5,6 +5,7 @@ import { pairSpindleCycles } from "./spindle-pairer";
 import { groupCyclesIntoJobs } from "./job-grouper";
 import { injectComputedRows } from "./computed-row-injector";
 import { annotateExtensions } from "./extension-annotator";
+import { buildKeySplitDisableWindows, getKeyActionSummary, isKeyAction } from "./key-actions";
 
 /**
  * Orchestrates the report generation pipeline.
@@ -86,8 +87,10 @@ export function buildReport(
             totalRejectQty += details.reject_qty;
 
             // C. Group into Jobs
+            const splitDisableWindows = buildKeySplitDisableWindows(segment.logs);
             const blocks = groupCyclesIntoJobs(segment.spindleCycles, details, {
-                toleranceSec: config.toleranceSec
+                toleranceSec: config.toleranceSec,
+                splitDisableWindows,
             });
             totalJobs += blocks.length;
 
@@ -164,12 +167,14 @@ export function buildReport(
         } else {
             // Unknown / orphan logs
             for (const log of segment.logs) {
+                const keySummary = isKeyAction(log.action) ? getKeyActionSummary(log.action) : undefined;
                 allRows.push({
                     rowId: `log-${log.log_id}`,
                     logId: log.log_id,
                     logTime: new Date(log.log_time),
                     action: log.action,
-                    jobType: "Unknown",
+                    summary: keySummary,
+                    jobType: isKeyAction(log.action) ? "Manual Input" : "Unknown",
                     originalLog: log,
                     timestamp: new Date(log.log_time).getTime(),
                 });

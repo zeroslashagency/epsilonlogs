@@ -108,13 +108,20 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                                 </div>
 
                                                 {/* Line 2: Counts */}
-                                                <div className="flex items-center gap-3 text-sm text-slate-400 bg-slate-900/50 px-3 py-1 rounded-full border border-slate-700/50 mt-1">
-                                                    <span>Jobs: <b className="text-slate-200">{s.totalJobs}</b></span>
-                                                    <span className="text-slate-600">/</span>
-                                                    <span>Cyc: <b className="text-slate-200">{s.totalCycles}</b></span>
-                                                    <span className="text-slate-600 mx-1">|</span>
-                                                    <span>Allot: <b className="text-slate-200">{s.allotedQty}</b></span>
-                                                    <span className="text-slate-600">→</span>
+                                            <div className="flex items-center gap-3 text-sm text-slate-400 bg-slate-900/50 px-3 py-1 rounded-full border border-slate-700/50 mt-1">
+                                                <span>Jobs: <b className="text-slate-200">{s.totalJobs}</b></span>
+                                                <span className="text-slate-600">/</span>
+                                                <span>Cyc: <b className="text-slate-200">{s.totalCycles}</b></span>
+                                                {(s.keyEventsTotal || 0) > 0 && (
+                                                    <>
+                                                        <span className="text-slate-600 mx-1">|</span>
+                                                        <span>Key: <b className="text-cyan-300">{s.keyEventsTotal}</b></span>
+                                                        <span className="text-slate-600">({s.keyOnCount || 0}/{s.keyOffCount || 0})</span>
+                                                    </>
+                                                )}
+                                                <span className="text-slate-600 mx-1">|</span>
+                                                <span>Allot: <b className="text-slate-200">{s.allotedQty}</b></span>
+                                                <span className="text-slate-600">→</span>
                                                     <span className={s.okQty > 0 ? "text-emerald-400 font-bold" : "text-slate-500"}>OK: {s.okQty}</span>
                                                     <span className="text-slate-600">/</span>
                                                     <span className={s.rejectQty > 0 ? "text-rose-400 font-bold" : "text-slate-500"}>Rej: {s.rejectQty}</span>
@@ -193,6 +200,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                     row.action === "WO_STOP" && "bg-blue-50 font-semibold",
                                     row.action === "WO_PAUSE" && "bg-amber-50",
                                     row.action === "WO_RESUME" && "bg-amber-50",
+                                    (row.action === "KEY_ON" || row.action === "KEY_OFF") && "bg-cyan-50",
                                 )}
                                 style={isInBlock ? { backgroundColor: 'rgb(199, 255, 216)' } : undefined}
                             >

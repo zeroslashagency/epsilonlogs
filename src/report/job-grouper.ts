@@ -1,10 +1,26 @@
 import { JobBlock, SpindleCycle, WoDetails } from "./report-types";
+import { KeySplitDisableWindow } from "./key-actions";
 
 const MAX_CYCLES_PER_JOB = 4;
 const MAX_GAP_SEC = 900; // 15 min
 
 export interface GroupingOptions {
     toleranceSec?: number;
+    splitDisableWindows?: KeySplitDisableWindow[];
+}
+
+function isSplitDisabledForGap(
+    _prevOffTs: number,
+    nextOnTs: number,
+    windows: KeySplitDisableWindow[],
+): boolean {
+    for (const window of windows) {
+        const activeAtNextOn = window.startTs < nextOnTs && window.endTs >= nextOnTs;
+        if (activeAtNextOn) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -15,7 +31,7 @@ export interface GroupingOptions {
 export function groupCyclesIntoJobs(
     cycles: SpindleCycle[],
     woDetails: WoDetails,
-    _options: GroupingOptions = {}
+    options: GroupingOptions = {}
 ): JobBlock[] {
     const pcl = woDetails.pcl;
 
@@ -59,7 +75,9 @@ export function groupCyclesIntoJobs(
                 const lastOffTs = new Date(lastCycle.offLog.log_time).getTime();
                 const thisOnTs = new Date(cycles[idx]!.onLog.log_time).getTime();
                 const gapSec = (thisOnTs - lastOffTs) / 1000;
-                if (gapSec > MAX_GAP_SEC) break;
+                const splitDisableWindows = options.splitDisableWindows || [];
+                const splitDisabled = isSplitDisabledForGap(lastOffTs, thisOnTs, splitDisableWindows);
+                if (gapSec > MAX_GAP_SEC && !splitDisabled) break;
             }
 
             const cycle = cycles[idx]!;

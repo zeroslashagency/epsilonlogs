@@ -281,6 +281,9 @@ describe('report export mapping', () => {
         okQty: 63,
         rejectQty: 0,
         totalPauseTime: '25m 48s',
+        keyEventsTotal: 4,
+        keyOnCount: 2,
+        keyOffCount: 2,
         pauseReasons: ['Paused(10m50s)', 'Tool Check(7m20s)', 'Setup(7m38s)'],
         stopComment: 'Job completed',
         startComment: 'Starting',
@@ -292,6 +295,7 @@ describe('report export mapping', () => {
     expect(mapped['Summary / Notes']).toContain('2) TIME / KPI');
     expect(mapped['Summary / Notes']).toContain('3) OUTPUT + COMMENTS');
     expect(mapped['Summary / Notes']).toContain('Allot: 57 | OK: 63 | Reject: 0');
+    expect(mapped['Summary / Notes']).toContain('Key: 4 (ON 2 / OFF 2)');
     expect(mapped['WO Core']).toBe('');
     expect(mapped['Setup / Device']).toBe('');
     expect(mapped['Job Type']).toBe('');
@@ -347,6 +351,32 @@ describe('report export mapping', () => {
 
     const mapped = mapReportRowToLogsSheetRow(row, woDetailsMap, deviceNameMap);
     expect(mapped['WO Core']).toContain('PCL: 15m 0s');
+  });
+
+  it('maps KEY actions with explicit key-mode summary notes', () => {
+    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails()]]);
+    const deviceNameMap = new Map<number, string>([[15, 'VMC - 05']]);
+
+    const keyOnMapped = mapReportRowToLogsSheetRow(
+      makeEventRow({
+        action: 'KEY_ON',
+        summary: 'Manual entry: KEY ON',
+      }),
+      woDetailsMap,
+      deviceNameMap,
+    );
+
+    const keyOffMapped = mapReportRowToLogsSheetRow(
+      makeEventRow({
+        action: 'KEY_OFF',
+        summary: 'Manual entry: KEY OFF',
+      }),
+      woDetailsMap,
+      deviceNameMap,
+    );
+
+    expect(keyOnMapped['Summary / Notes']).toContain('Manual entry: KEY ON');
+    expect(keyOffMapped['Summary / Notes']).toContain('Manual entry: KEY OFF');
   });
 });
 
@@ -541,6 +571,28 @@ describe('report workbook structure', () => {
     expect(logsSheet?.getCell('F2').value).toBe(String(centerCell?.value || ''));
     expect(logsSheet?.getCell('I2').value).toBe(String(rightCell?.value || ''));
   });
+
+  it('applies key-action tint for KEY rows in logs sheet', async () => {
+    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails()]]);
+    const deviceNameMap = new Map<number, string>([[15, 'VMC - 05']]);
+
+    const keyRow = makeEventRow({
+      action: 'KEY_ON',
+      summary: 'Manual entry: KEY ON',
+      jobType: 'Unknown',
+    });
+
+    const workbook = await buildExcelWorkbook({
+      rows: [keyRow],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap,
+    });
+
+    const logsSheet = workbook.getWorksheet('Logs');
+    const rowFill = logsSheet?.getCell('A2').fill as { fgColor?: { argb?: string } };
+    expect(rowFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.keyActionBg);
+  });
 });
 
 describe('grouped workbook structure', () => {
@@ -559,7 +611,7 @@ describe('grouped workbook structure', () => {
     expect(headerValues.slice(1, GROUPED_LOG_SHEET_HEADERS.length + 1)).toEqual(GROUPED_LOG_SHEET_HEADERS);
   });
 
-  it('shows JOB label once per group and merges PLC/JOB for spindle pairs', async () => {
+  it('shows JOB label once per group and merges PLC for spindle pairs', async () => {
     const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails()]]);
     const deviceNameMap = new Map<number, string>([[15, 'VMC - 05']]);
 
@@ -595,9 +647,54 @@ describe('grouped workbook structure', () => {
         action: 'SPINDLE_OFF',
       },
     });
+    const loadingGap: ReportRow = {
+      rowId: 'computed-load-3101',
+      logTime: new Date('2026-02-10T14:20:10.500'),
+      action: '',
+      durationText: '1 min 1 sec',
+      durationSec: 61,
+      label: 'Loading /Unloading Time',
+      jobType: 'Production',
+      timestamp: new Date('2026-02-10T14:20:10.500').getTime(),
+      isComputed: true,
+      operatorName: 'RamaKrishnan',
+    };
+    const spindleOn2 = makeEventRow({
+      rowId: 'log-3102',
+      sNo: 12,
+      logId: 3102,
+      logTime: new Date('2026-02-10T14:20:43'),
+      action: 'SPINDLE_ON',
+      label: 'JOB - 02',
+      jobBlockLabel: 'JOB - 02',
+      summary: '15 sec lower',
+      timestamp: new Date('2026-02-10T14:20:43').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 3102,
+        action: 'SPINDLE_ON',
+      },
+    });
+    const spindleOff2 = makeEventRow({
+      rowId: 'log-3103',
+      sNo: 13,
+      logId: 3103,
+      logTime: new Date('2026-02-10T14:21:49'),
+      action: 'SPINDLE_OFF',
+      label: 'JOB - 02',
+      durationSec: 66,
+      durationText: '1 min 6 sec',
+      jobBlockLabel: 'JOB - 02',
+      timestamp: new Date('2026-02-10T14:21:49').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 3103,
+        action: 'SPINDLE_OFF',
+      },
+    });
 
     const workbook = await buildGroupedExcelWorkbook({
-      rows: [spindleOn, spindleOff],
+      rows: [spindleOn, spindleOff, loadingGap, spindleOn2, spindleOff2],
       stats: makeStats(),
       woDetailsMap,
       deviceNameMap,
@@ -608,10 +705,16 @@ describe('grouped workbook structure', () => {
 
     expect(groupedSheet?.getCell('D2').value).toBe('SPINDLE_ON');
     expect(groupedSheet?.getCell('D3').value).toBe('SPINDLE_OFF');
+    expect(groupedSheet?.getCell('B2').value).toBe(3100);
+    expect(groupedSheet?.getCell('B3').value).toBe(3101);
     expect(groupedSheet?.getCell('F2').value).toBe('0:19:54');
     expect(groupedSheet?.getCell('F3').value).toBe('0:19:54');
     expect(groupedSheet?.getCell('G2').value).toBe('JOB 1');
-    expect(groupedSheet?.getCell('G3').value).toBe('JOB 1');
+    expect(groupedSheet?.getCell('G3').value).toBe('');
+    expect(groupedSheet?.getCell('H2').value).toBe('Loading /Unloading Time');
+    expect(groupedSheet?.getCell('H3').value).toBe('1 min 1 sec');
+    expect(groupedSheet?.getCell('A2').value).toBe(1);
+    expect(groupedSheet?.getCell('A3').value).toBe(2);
 
     const topBorder = groupedSheet?.getCell('A2').border?.top;
     const bottomBorder = groupedSheet?.getCell('A3').border?.bottom;
@@ -709,10 +812,44 @@ describe('grouped workbook structure', () => {
     const groupedSheet = workbook.getWorksheet('Logs Grouped');
     expect(groupedSheet).toBeDefined();
 
-    expect(String(groupedSheet?.getCell('G2').value || '')).toContain('Comment - Machine starting');
-    expect(String(groupedSheet?.getCell('G3').value || '')).toContain('Reason - Lunch break');
-    expect(String(groupedSheet?.getCell('G3').value || '')).toContain('Note - Missed Again');
-    expect(String(groupedSheet?.getCell('G5').value || '')).toContain('Reason - Job completed');
+    expect(String(groupedSheet?.getCell('H2').value || '')).toContain('Comment - Machine starting');
+    expect(String(groupedSheet?.getCell('H3').value || '')).toContain('Reason - Lunch break');
+    expect(String(groupedSheet?.getCell('H3').value || '')).toContain('Note - Missed Again');
+    expect(String(groupedSheet?.getCell('H5').value || '')).toContain('Reason - Job completed');
+  });
+
+  it('appends end summary block in grouped sheet footer', async () => {
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [],
+      stats: makeStats(),
+      woDetailsMap: new Map(),
+      deviceNameMap: new Map(),
+      reportConfig: {
+        deviceId: 15,
+        startDate: '09/02/2026, 11:00 AM',
+        endDate: '09/02/2026, 05:00 PM',
+      },
+    });
+
+    const groupedSheet = workbook.getWorksheet('Logs Grouped');
+    expect(groupedSheet).toBeDefined();
+
+    expect(groupedSheet?.getCell('A3').value).toBe('End Summary Block');
+    expect(groupedSheet?.getCell('A4').value).toBe('Start Time');
+    expect(groupedSheet?.getCell('G4').value).toBe(': 09/02/2026, 11:00 AM');
+    expect(groupedSheet?.getCell('A5').value).toBe('End Time');
+    expect(groupedSheet?.getCell('G5').value).toBe(': 09/02/2026, 05:00 PM');
+    expect(groupedSheet?.getCell('A6').value).toBe('Generate Report');
+    expect(groupedSheet?.getCell('A7').value).toBe('Total Time Selected for reports');
+    expect(groupedSheet?.getCell('G7').value).toBe(': 00:04:20');
+    expect(groupedSheet?.getCell('A8').value).toBe('Total Cutting Run Time');
+    expect(groupedSheet?.getCell('G8').value).toBe(': 00:03:20');
+    expect(groupedSheet?.getCell('A9').value).toBe('Loading unloading Time');
+    expect(groupedSheet?.getCell('G9').value).toBe(': 00:00:20');
+    expect(groupedSheet?.getCell('A10').value).toBe('Total Pause Time');
+    expect(groupedSheet?.getCell('G10').value).toBe(': 00:00:30');
+    expect(groupedSheet?.getCell('A11').value).toBe('Others');
+    expect(groupedSheet?.getCell('G11').value).toBe(': 00:00:10');
   });
 });
 

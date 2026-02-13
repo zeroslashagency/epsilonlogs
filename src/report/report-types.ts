@@ -133,6 +133,9 @@ export interface WoSummaryData {
     okQty: number;
     rejectQty: number;
     totalPauseTime: string;
+    keyEventsTotal?: number;
+    keyOnCount?: number;
+    keyOffCount?: number;
     pauseReasons: string[];
     stopComment: string;
     startComment: string;
@@ -156,7 +159,7 @@ export interface ReportRow {
     durationSec?: number | undefined;
     label?: string | undefined;
     summary?: string | undefined;
-    jobType: "Production" | "Unknown";
+    jobType: "Production" | "Unknown" | "Manual Input";
     operatorName?: string;
     classification?: "GOOD" | "WARNING" | "BAD" | "UNKNOWN";
     reasonCode?: string;

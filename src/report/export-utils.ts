@@ -23,6 +23,7 @@ export const GROUPED_LOG_SHEET_HEADERS = [
     'TIME',
     'PLC',
     'JOB',
+    'Notes',
     'OP',
 ] as const;
 
@@ -38,6 +39,7 @@ export const LOG_STYLE_COLORS = {
     groupBorder: 'FF34D399',
     woActionBg: 'FFEFF6FF',
     pauseActionBg: 'FFFEF3C7',
+    keyActionBg: 'FFE0F2FE',
     computedBg: 'FFF8FAFC',
     unknownBg: 'FFF1F5F9',
     defaultBg: 'FFFFFFFF',
@@ -76,6 +78,7 @@ export interface GroupedLogsSheetRow {
     TIME: string;
     PLC: string;
     JOB: string;
+    Notes: string;
     OP: string;
 }
 
@@ -108,6 +111,7 @@ const GROUPED_LOG_SHEET_COLUMN_WIDTHS = [
     14,  // TIME
     14,  // PLC
     20,  // JOB
+    40,  // Notes
     18,  // OP
 ] as const;
 
@@ -151,6 +155,7 @@ interface GroupedExportRow {
     pairId?: string;
     mergePlc?: boolean;
     mergeJob?: boolean;
+    mergeNotes?: boolean;
     jobGroupKey?: string | null;
     isGroupFirst?: boolean;
     isGroupLast?: boolean;
@@ -612,6 +617,9 @@ function resolveSummaryNotes(row: ReportRow, woDetails?: WoDetails): string {
         lines.push(`End: ${summary.endTime || '—'}`);
         lines.push(`Duration: ${summary.totalDuration}`);
         lines.push(`Jobs: ${summary.totalJobs} | Cycles: ${summary.totalCycles}`);
+        if ((summary.keyEventsTotal || 0) > 0) {
+            lines.push(`Key: ${summary.keyEventsTotal} (ON ${summary.keyOnCount || 0} / OFF ${summary.keyOffCount || 0})`);
+        }
         lines.push(`Cutting: ${summary.totalCuttingTime}`);
         lines.push(`Pause: ${summary.totalPauseTime}`);
         lines.push('');
@@ -681,6 +689,12 @@ function resolveSummaryNotes(row: ReportRow, woDetails?: WoDetails): string {
             lines.push(`Reason: ${stopReason}`);
             return lines.join('\n');
         }
+        case 'KEY_ON':
+            lines.push('Manual entry: KEY ON');
+            return lines.join('\n');
+        case 'KEY_OFF':
+            lines.push('Manual entry: KEY OFF');
+            return lines.join('\n');
         default: {
             if (row.summary) {
                 lines.push(row.summary);
@@ -712,6 +726,9 @@ function buildWoSummarySectionTexts(summary: WoSummaryData, pclText: string): { 
         `End: ${summary.endTime || '—'}`,
         `Duration: ${summary.totalDuration}`,
         `Jobs: ${summary.totalJobs} | Cycles: ${summary.totalCycles}`,
+        ...(summary.keyEventsTotal && summary.keyEventsTotal > 0
+            ? [`Key: ${summary.keyEventsTotal} (ON ${summary.keyOnCount || 0} / OFF ${summary.keyOffCount || 0})`]
+            : []),
         `Cutting: ${summary.totalCuttingTime}`,
         `Pause: ${summary.totalPauseTime}`,
     ].join('\n');
@@ -832,6 +849,18 @@ function formatSecondsToVerbose(seconds: number | undefined): string {
     return `${minutes}min ${secs} sec`;
 }
 
+function formatSecondsToClockPadded(seconds: number | undefined): string {
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds)) {
+        return '00:00:00';
+    }
+
+    const total = Math.max(0, Math.round(seconds));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
 function normalizeGroupedJobLabel(label: string): string {
     const trimmed = label.trim();
     const matched = trimmed.match(/^job\s*-\s*0*(\d+)$/i);
@@ -901,6 +930,66 @@ function resolveGroupedWoActionComment(
     return '';
 }
 
+function resolveGroupedSpindleOnNote(row: ReportRow): string {
+    return normalizeCommentValue(row.summary)
+        || normalizeCommentValue(row.durationText);
+}
+
+function resolveGroupedSpindleOffNote(row: ReportRow): string {
+    return normalizeCommentValue(row.durationText)
+        || normalizeCommentValue(row.summary)
+        || formatSecondsToVerbose(row.durationSec);
+}
+
+function formatSecondsToJobLoadingText(seconds: number): string {
+    const total = Math.max(0, Math.round(seconds));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+
+    if (hours > 0) {
+        return `${hours} hr ${minutes} min ${secs} sec`;
+    }
+    if (minutes > 0) {
+        return `${minutes} min ${secs} sec`;
+    }
+    return `${secs} sec`;
+}
+
+function isGroupedLoadingRow(row: ReportRow): boolean {
+    if (!row.isComputed || row.action) {
+        return false;
+    }
+    const label = String(row.label || '').trim().toLowerCase();
+    return label.includes('loading') && label.includes('unloading');
+}
+
+function hasPauseActionInRange(rows: ReportRow[], startTs: number, endTs: number): boolean {
+    for (const row of rows) {
+        if (row.timestamp <= startTs || row.timestamp >= endTs) {
+            continue;
+        }
+        if (row.action === 'WO_PAUSE' || row.action === 'WO_RESUME') {
+            return true;
+        }
+    }
+    return false;
+}
+
+function sumLoadingRowsInRange(rows: ReportRow[], startTs: number, endTs: number): number {
+    let total = 0;
+    for (const row of rows) {
+        if (row.timestamp <= startTs || row.timestamp >= endTs) {
+            continue;
+        }
+        if (!isGroupedLoadingRow(row)) {
+            continue;
+        }
+        total += Math.max(0, Math.round(row.durationSec || 0));
+    }
+    return total;
+}
+
 function buildGroupedBaseRow(
     row: ReportRow,
     serialNo: number | '',
@@ -916,6 +1005,7 @@ function buildGroupedBaseRow(
         TIME: formatGroupedTime24(row.logTime),
         PLC: formatSecondsToClock(row.durationSec),
         JOB: '',
+        Notes: '',
         OP: operator,
     };
 }
@@ -954,6 +1044,7 @@ function buildGroupedExportRows(
                     TIME: `Dur ${summary.totalDuration}`,
                     PLC: `Cut ${summary.totalCuttingTime} | Pause ${summary.totalPauseTime}`,
                     JOB: `Jobs ${summary.totalJobs} | Cyc ${summary.totalCycles} | OK ${summary.okQty} | Rej ${summary.rejectQty}`,
+                    Notes: '',
                     OP: summary.operatorName,
                 },
                 style: 'summary',
@@ -997,13 +1088,13 @@ function buildGroupedExportRows(
                 const commentLines: string[] = [];
                 commentLines.push(`Reason - ${pauseReason || '—'}`);
                 commentLines.push(`Note - ${resumeNote || '—'}`);
-                const jobValue = commentLines.join('\n');
+                const notesValue = commentLines.join('\n');
 
                 const pauseBase = buildGroupedBaseRow(row, serial, woDetailsMap);
                 pauseBase.Action = firstAction;
                 pauseBase.TIME = timeFormatter(row.logTime);
                 pauseBase.PLC = plcValue;
-                pauseBase.JOB = jobValue;
+                pauseBase.Notes = notesValue;
 
                 const resumeSerial = typeof resumeRow.logId === 'number' ? serialNo++ : '';
                 const resumeBase = buildGroupedBaseRow(resumeRow, resumeSerial, woDetailsMap);
@@ -1011,13 +1102,14 @@ function buildGroupedExportRows(
                 resumeBase.TIME = timeFormatter(resumeRow.logTime);
                 resumeBase.PLC = '';
                 resumeBase.JOB = '';
+                resumeBase.Notes = '';
 
                 exportRows.push({
                     row: pauseBase,
                     style: pairStyle,
                     pairId,
                     mergePlc: true,
-                    mergeJob: true,
+                    mergeNotes: true,
                 });
                 exportRows.push({
                     row: resumeBase,
@@ -1031,6 +1123,92 @@ function buildGroupedExportRows(
         }
 
         if (row.action === 'SPINDLE_ON') {
+            const groupKey = row.jobBlockLabel?.trim();
+            if (groupKey) {
+                if (sortedRows[index - 1]?.jobBlockLabel?.trim() === groupKey) {
+                    continue;
+                }
+
+                let groupEnd = index;
+                while (groupEnd + 1 < sortedRows.length && sortedRows[groupEnd + 1]?.jobBlockLabel?.trim() === groupKey) {
+                    groupEnd += 1;
+                }
+
+                let firstOn: ReportRow | null = null;
+                let lastOff: ReportRow | null = null;
+                let totalCuttingSec = 0;
+
+                for (let cursor = index; cursor <= groupEnd; cursor += 1) {
+                    const candidate = sortedRows[cursor];
+                    if (!candidate || candidate.isWoHeader || candidate.isWoSummary || candidate.isPauseBanner) {
+                        continue;
+                    }
+
+                    if (candidate.action === 'SPINDLE_ON' && !firstOn) {
+                        firstOn = candidate;
+                    }
+
+                    if (candidate.action === 'SPINDLE_OFF') {
+                        lastOff = candidate;
+                        totalCuttingSec += Math.max(0, Math.round(candidate.durationSec || 0));
+                    }
+                }
+
+                if (firstOn && lastOff) {
+                    let boundaryLoadingSec = 0;
+                    for (let cursor = groupEnd + 1; cursor < sortedRows.length; cursor += 1) {
+                        const candidate = sortedRows[cursor];
+                        if (!candidate || candidate.isWoHeader || candidate.isWoSummary || candidate.isPauseBanner) {
+                            continue;
+                        }
+                        const nextKey = candidate.jobBlockLabel?.trim();
+                        if (candidate.action === 'SPINDLE_ON' && nextKey && nextKey !== groupKey) {
+                            const hasPause = hasPauseActionInRange(sortedRows, lastOff.timestamp, candidate.timestamp);
+                            boundaryLoadingSec = hasPause
+                                ? 0
+                                : sumLoadingRowsInRange(sortedRows, lastOff.timestamp, candidate.timestamp);
+                            break;
+                        }
+                    }
+
+                    const onSerial = typeof firstOn.logId === 'number' ? serialNo++ : '';
+                    const onBase = buildGroupedBaseRow(firstOn, onSerial, woDetailsMap);
+                    onBase.Action = 'SPINDLE_ON';
+                    onBase.TIME = formatGroupedTime24(firstOn.logTime);
+                    onBase.PLC = formatSecondsToClock(totalCuttingSec);
+                    onBase.JOB = '';
+                    onBase.Notes = boundaryLoadingSec > 0 ? 'Loading /Unloading Time' : '';
+
+                    const offSerial = typeof lastOff.logId === 'number' ? serialNo++ : '';
+                    const offBase = buildGroupedBaseRow(lastOff, offSerial, woDetailsMap);
+                    offBase.Action = 'SPINDLE_OFF';
+                    offBase.TIME = formatGroupedTime24(lastOff.logTime);
+                    offBase.PLC = '';
+                    offBase.JOB = '';
+                    offBase.Notes = boundaryLoadingSec > 0
+                        ? formatSecondsToJobLoadingText(boundaryLoadingSec)
+                        : resolveGroupedSpindleOffNote(lastOff);
+
+                    const pairId = `job-${firstOn.rowId}-${lastOff.rowId}`;
+                    exportRows.push({
+                        row: onBase,
+                        style: 'spindlePair',
+                        pairId,
+                        mergePlc: true,
+                        jobGroupKey: groupKey,
+                    });
+                    exportRows.push({
+                        row: offBase,
+                        style: 'spindlePair',
+                        pairId,
+                        jobGroupKey: groupKey,
+                    });
+
+                    index = groupEnd;
+                    continue;
+                }
+            }
+
             let offIndex = -1;
             for (let cursor = index + 1; cursor < sortedRows.length; cursor += 1) {
                 const candidate = sortedRows[cursor];
@@ -1049,13 +1227,14 @@ function buildGroupedExportRows(
             if (offIndex > -1) {
                 const offRow = sortedRows[offIndex]!;
                 const pairId = `spindle-${row.rowId}-${offRow.rowId}`;
-                const groupKey = row.jobBlockLabel || offRow.jobBlockLabel || null;
+                const fallbackGroupKey = row.jobBlockLabel || offRow.jobBlockLabel || null;
 
                 const onBase = buildGroupedBaseRow(row, serial, woDetailsMap);
                 onBase.Action = 'SPINDLE_ON';
                 onBase.TIME = formatGroupedTime24(row.logTime);
                 onBase.PLC = formatSecondsToClock(offRow.durationSec);
                 onBase.JOB = '';
+                onBase.Notes = resolveGroupedSpindleOnNote(row);
 
                 const offSerial = typeof offRow.logId === 'number' ? serialNo++ : '';
                 const offBase = buildGroupedBaseRow(offRow, offSerial, woDetailsMap);
@@ -1063,20 +1242,20 @@ function buildGroupedExportRows(
                 offBase.TIME = formatGroupedTime24(offRow.logTime);
                 offBase.PLC = '';
                 offBase.JOB = '';
+                offBase.Notes = resolveGroupedSpindleOffNote(offRow);
 
                 exportRows.push({
                     row: onBase,
                     style: 'spindlePair',
                     pairId,
                     mergePlc: true,
-                    mergeJob: true,
-                    jobGroupKey: groupKey,
+                    jobGroupKey: fallbackGroupKey,
                 });
                 exportRows.push({
                     row: offBase,
                     style: 'spindlePair',
                     pairId,
-                    jobGroupKey: groupKey,
+                    jobGroupKey: fallbackGroupKey,
                 });
 
                 index = offIndex;
@@ -1092,7 +1271,13 @@ function buildGroupedExportRows(
             || action === 'WO_RESUME'
             ? 'yellowAction'
             : 'default';
-        base.JOB = resolveGroupedWoActionComment(row, woDetailsMap);
+        if (action === 'WO_START' || action === 'WO_PAUSE' || action === 'WO_RESUME' || action === 'WO_STOP') {
+            base.Notes = resolveGroupedWoActionComment(row, woDetailsMap);
+        } else if (action === 'SPINDLE_ON') {
+            base.Notes = resolveGroupedSpindleOnNote(row);
+        } else if (action === 'SPINDLE_OFF') {
+            base.Notes = resolveGroupedSpindleOffNote(row);
+        }
 
         exportRows.push({
             row: base,
@@ -1136,6 +1321,16 @@ function buildGroupedExportRows(
         index = end;
     }
 
+    let displaySerial = 1;
+    for (const exportRow of exportRows) {
+        if (typeof exportRow.row['Log ID'] === 'number') {
+            exportRow.row['S.No'] = displaySerial;
+            displaySerial += 1;
+        } else {
+            exportRow.row['S.No'] = '';
+        }
+    }
+
     return exportRows;
 }
 
@@ -1177,8 +1372,8 @@ function applyGroupedDataRowStyle(row: Row, exportRow: GroupedExportRow): void {
         };
         cell.alignment = {
             vertical: 'middle',
-            horizontal: col === 3 || col === 8 ? 'left' : 'center',
-            wrapText: col === 7,
+            horizontal: col === 3 || col === 8 || col === 9 ? 'left' : 'center',
+            wrapText: col === 7 || col === 8,
         };
 
         const thinBorder = { style: 'thin' as const, color: { argb: LOG_STYLE_COLORS.gridLine } };
@@ -1249,7 +1444,7 @@ function applyGroupedDataRowStyle(row: Row, exportRow: GroupedExportRow): void {
             };
             cell.alignment = {
                 vertical: 'middle',
-                horizontal: col === 3 || col === 8 ? 'left' : 'center',
+                horizontal: col === 3 || col === 8 || col === 9 ? 'left' : 'center',
                 wrapText: true,
             };
         }
@@ -1285,6 +1480,100 @@ function applyGroupedPairMerges(worksheet: Worksheet, rows: GroupedExportRow[]):
                 wrapText: true,
             };
         }
+
+        if (current.mergeNotes && current.row.Notes) {
+            worksheet.mergeCells(`H${current.rowNumber}:H${next.rowNumber}`);
+            worksheet.getCell(`H${current.rowNumber}`).alignment = {
+                vertical: 'middle',
+                horizontal: 'left',
+                wrapText: true,
+            };
+        }
+    }
+}
+
+function resolveGroupedSummaryRange(rows: ReportRow[], reportConfig?: Pick<ReportConfig, 'startDate' | 'endDate'>): { startText: string; endText: string } {
+    const configuredStart = String(reportConfig?.startDate ?? '').trim();
+    const configuredEnd = String(reportConfig?.endDate ?? '').trim();
+    if (configuredStart || configuredEnd) {
+        return {
+            startText: configuredStart || '—',
+            endText: configuredEnd || '—',
+        };
+    }
+
+    const logRows = rows.filter((row) => typeof row.logId === 'number');
+    if (logRows.length === 0) {
+        return { startText: '—', endText: '—' };
+    }
+
+    let minTs = Number.POSITIVE_INFINITY;
+    let maxTs = Number.NEGATIVE_INFINITY;
+    let minDate: Date | null = null;
+    let maxDate: Date | null = null;
+    for (const row of logRows) {
+        if (row.timestamp < minTs) {
+            minTs = row.timestamp;
+            minDate = row.logTime;
+        }
+        if (row.timestamp > maxTs) {
+            maxTs = row.timestamp;
+            maxDate = row.logTime;
+        }
+    }
+
+    return {
+        startText: minDate ? formatGroupedLogDateTime(minDate) : '—',
+        endText: maxDate ? formatGroupedLogDateTime(maxDate) : '—',
+    };
+}
+
+function addGroupedEndSummaryBlock(worksheet: Worksheet, input: ExcelExportInput): void {
+    const blockStartRow = worksheet.rowCount + 2;
+    const range = resolveGroupedSummaryRange(input.rows, input.reportConfig);
+
+    const summaryLines: Array<{ label: string; value?: string }> = [
+        { label: 'End Summary Block' },
+        { label: 'Start Time', value: range.startText },
+        { label: 'End Time', value: range.endText },
+        { label: 'Generate Report' },
+        { label: 'Total Time Selected for reports', value: formatSecondsToClockPadded(input.stats.totalWoDurationSec) },
+        { label: 'Total Cutting Run Time', value: formatSecondsToClockPadded(input.stats.totalCuttingSec) },
+        { label: 'Loading unloading Time', value: formatSecondsToClockPadded(input.stats.totalLoadingUnloadingSec) },
+        { label: 'Total Pause Time', value: formatSecondsToClockPadded(input.stats.totalPauseSec) },
+        { label: 'Others', value: formatSecondsToClockPadded(input.stats.totalIdleSec) },
+    ];
+
+    for (let offset = 0; offset < summaryLines.length; offset += 1) {
+        const rowNumber = blockStartRow + offset;
+        const line = summaryLines[offset]!;
+        worksheet.mergeCells(`A${rowNumber}:F${rowNumber}`);
+        worksheet.getCell(`A${rowNumber}`).value = line.label;
+        worksheet.getCell(`A${rowNumber}`).font = {
+            bold: offset === 0 || line.label === 'Generate Report',
+            color: { argb: LOG_STYLE_COLORS.darkText },
+        };
+        worksheet.getCell(`A${rowNumber}`).alignment = {
+            vertical: 'middle',
+            horizontal: 'left',
+        };
+
+        worksheet.mergeCells(`G${rowNumber}:I${rowNumber}`);
+        worksheet.getCell(`G${rowNumber}`).value = line.value ? `: ${line.value}` : '';
+        worksheet.getCell(`G${rowNumber}`).alignment = {
+            vertical: 'middle',
+            horizontal: 'left',
+        };
+
+        for (let col = 1; col <= GROUPED_LOG_SHEET_HEADERS.length; col += 1) {
+            const cell = worksheet.getCell(`${toExcelColumnName(col)}${rowNumber}`);
+            cell.border = {
+                top: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+                left: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+                bottom: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+                right: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            };
+        }
     }
 }
 
@@ -1314,6 +1603,7 @@ function addGroupedLogsSheet(workbook: Workbook, input: ExcelExportInput): void 
     }
 
     applyGroupedPairMerges(worksheet, groupedRows);
+    addGroupedEndSummaryBlock(worksheet, input);
 }
 
 export function mapReportRowToLogsSheetRow(
@@ -1387,6 +1677,13 @@ function resolveRowVisual(row: ReportRow, groupMeta: JobGroupMeta): ExportRowVis
     if (row.action === 'WO_PAUSE' || row.action === 'WO_RESUME') {
         return {
             fillColor: LOG_STYLE_COLORS.pauseActionBg,
+            fontColor: LOG_STYLE_COLORS.darkText,
+        };
+    }
+
+    if (row.action === 'KEY_ON' || row.action === 'KEY_OFF') {
+        return {
+            fillColor: LOG_STYLE_COLORS.keyActionBg,
             fontColor: LOG_STYLE_COLORS.darkText,
         };
     }

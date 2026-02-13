@@ -1,5 +1,6 @@
 import { DeviceLogEntry, JobBlock, PausePeriod, ReportRow, SpindleCycle, WoDetails, WoSegment } from "./report-types.js";
 import { formatDuration, formatVariance } from "./format-utils.js";
+import { getKeyActionSummary, isKeyAction } from "./key-actions.js";
 
 const MAX_LOADING_GAP_SEC = 900;    // 15 min
 const SHIFT_BREAK_SEC = 120 * 60;   // 120 min
@@ -260,6 +261,23 @@ export function injectComputedRows(
         });
     }
 
+    // 5B. Key actions (manual key mode markers)
+    const keyLogs = segment.logs.filter((l: DeviceLogEntry) => isKeyAction(l.action));
+    for (const log of keyLogs) {
+        rows.push({
+            rowId: `log-${log.log_id}`,
+            logId: log.log_id,
+            logTime: new Date(log.log_time),
+            action: log.action,
+            summary: getKeyActionSummary(log.action),
+            jobType: "Manual Input",
+            originalLog: log,
+            timestamp: new Date(log.log_time).getTime(),
+            operatorName: operator,
+            woSpecs,
+        });
+    }
+
     // 6. WO_STOP row
     if (woStopLog) {
         rows.push({
@@ -283,6 +301,9 @@ export function injectComputedRows(
     // 7. WO Summary banner (after WO_STOP)
     if (woStopLog && woDetails) {
         const totalPauseSec = segment.pausePeriods.reduce((s: number, p: PausePeriod) => s + p.durationSec, 0);
+        const keyOnCount = segment.logs.filter((l: DeviceLogEntry) => l.action === "KEY_ON").length;
+        const keyOffCount = segment.logs.filter((l: DeviceLogEntry) => l.action === "KEY_OFF").length;
+        const keyEventsTotal = keyOnCount + keyOffCount;
         const pauseReasons = segment.pausePeriods
             .map((p: PausePeriod) => findPauseReason(p.pauseLog, woDetails))
             .filter(Boolean) as string[];
@@ -318,6 +339,9 @@ export function injectComputedRows(
                 okQty: woDetails.ok_qty,
                 rejectQty: woDetails.reject_qty,
                 totalPauseTime: totalPauseSec > 0 ? formatDuration(totalPauseSec) : "0 sec",
+                keyEventsTotal,
+                keyOnCount,
+                keyOffCount,
                 pauseReasons,
                 stopComment: woDetails.stop_comment,
                 startComment: woDetails.start_comment,

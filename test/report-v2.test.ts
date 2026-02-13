@@ -6,6 +6,7 @@ import {
   DEFAULT_REPORT_V2_FILTER_STATE,
   ReportV2FilterState,
 } from "../src/report/report-builder-v2";
+import { buildKeySplitDisableWindows } from "../src/report/key-actions";
 import type { DeviceLogEntry, ReportConfig, ReportRow, WoDetails } from "../src/report/report-types";
 
 const makeLog = (
@@ -24,7 +25,7 @@ const makeLog = (
   };
 };
 
-const makeDetails = (): WoDetails => ({
+const makeDetails = (overrides: Partial<WoDetails> = {}): WoDetails => ({
   id: 900,
   pcl: null,
   start_time: "2026-02-09T08:00:00Z",
@@ -44,6 +45,7 @@ const makeDetails = (): WoDetails => ({
   reject_qty: 0,
   device_id: 15,
   duration: 2400,
+  ...overrides,
 });
 
 const makeConfig = (): ReportConfig => ({
@@ -180,5 +182,85 @@ describe("report v2 filters", () => {
       "unknown",
       "break",
     ]);
+  });
+});
+
+describe("key on/off controlled grouping", () => {
+  it("builds split-disable window from KEY_ON to KEY_OFF", () => {
+    const logs: DeviceLogEntry[] = [
+      makeLog(1, 0, "SPINDLE_ON"),
+      makeLog(2, 10, "KEY_ON"),
+      makeLog(3, 20, "SPINDLE_OFF"),
+      makeLog(4, 30, "KEY_OFF"),
+    ];
+
+    const windows = buildKeySplitDisableWindows(logs);
+    expect(windows).toHaveLength(1);
+    expect(windows[0]!.startTs).toBe(new Date(logs[1]!.log_time).getTime());
+    expect(windows[0]!.endTs).toBe(new Date(logs[3]!.log_time).getTime());
+  });
+
+  it("disables gap split after KEY_ON and restores normal split after KEY_OFF", () => {
+    const logs: DeviceLogEntry[] = [
+      makeLog(1, 0, "WO_START"),
+      makeLog(2, 10, "SPINDLE_ON"),
+      makeLog(3, 70, "SPINDLE_OFF"),
+      makeLog(4, 120, "KEY_ON"),
+      makeLog(5, 1400, "SPINDLE_ON"),
+      makeLog(6, 1460, "SPINDLE_OFF"),
+      makeLog(7, 1500, "KEY_OFF"),
+      makeLog(8, 3000, "SPINDLE_ON"),
+      makeLog(9, 3060, "SPINDLE_OFF"),
+      makeLog(10, 3100, "WO_STOP"),
+    ];
+
+    const detailsMap = new Map<number, WoDetails>([
+      [900, makeDetails({ pcl: 400 })],
+    ]);
+
+    const { rows, stats } = buildReport(logs, detailsMap, makeConfig());
+
+    const rowByLogId = new Map(
+      rows
+        .filter((row): row is ReportRow & { logId: number } => typeof row.logId === "number")
+        .map((row) => [row.logId, row]),
+    );
+
+    const cycle1 = rowByLogId.get(2);
+    const cycle2 = rowByLogId.get(5);
+    const cycle3 = rowByLogId.get(8);
+
+    expect(cycle1?.jobBlockLabel).toBeTruthy();
+    expect(cycle2?.jobBlockLabel).toBe(cycle1?.jobBlockLabel);
+    expect(cycle3?.jobBlockLabel).not.toBe(cycle1?.jobBlockLabel);
+    expect(stats.totalJobs).toBe(2);
+  });
+
+  it("includes KEY rows with key-mode summary notes", () => {
+    const logs: DeviceLogEntry[] = [
+      makeLog(1, 0, "WO_START"),
+      makeLog(2, 10, "SPINDLE_ON"),
+      makeLog(3, 70, "SPINDLE_OFF"),
+      makeLog(4, 120, "KEY_ON"),
+      makeLog(5, 180, "KEY_OFF"),
+      makeLog(6, 220, "WO_STOP"),
+    ];
+
+    const detailsMap = new Map<number, WoDetails>([
+      [900, makeDetails({ pcl: 400 })],
+    ]);
+
+    const { rows } = buildReport(logs, detailsMap, makeConfig());
+    const keyOn = rows.find((row) => row.action === "KEY_ON");
+    const keyOff = rows.find((row) => row.action === "KEY_OFF");
+    const woSummary = rows.find((row) => row.isWoSummary)?.woSummaryData;
+
+    expect(keyOn?.summary).toBe("Manual entry: KEY ON");
+    expect(keyOff?.summary).toBe("Manual entry: KEY OFF");
+    expect(keyOn?.jobType).toBe("Manual Input");
+    expect(keyOff?.jobType).toBe("Manual Input");
+    expect(woSummary?.keyEventsTotal).toBe(2);
+    expect(woSummary?.keyOnCount).toBe(1);
+    expect(woSummary?.keyOffCount).toBe(1);
   });
 });
