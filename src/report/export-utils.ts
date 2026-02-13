@@ -53,6 +53,7 @@ export const LOG_STYLE_COLORS = {
     groupedYellow: 'FFFFFF00',
     groupedGreen: 'FF92D050',
     groupedBeige: 'FFE8D695',
+    groupedLightBlue: 'FFBDD7EE',
     groupedOrange: 'FFF4B183',
     groupedOutline: 'FF22C55E',
     groupedSummaryBg: 'FF1E3A8A',
@@ -147,7 +148,7 @@ type WorkbookCtor = new () => Workbook;
 let excelJsModulePromise: Promise<ExcelJSImport> | null = null;
 let excelJsMinModulePromise: Promise<unknown> | null = null;
 
-type GroupedRowStyle = 'default' | 'yellowAction' | 'spindlePair' | 'keyPair' | 'pausePair' | 'summary';
+type GroupedRowStyle = 'default' | 'yellowAction' | 'spindlePair' | 'keyPair' | 'pausePair' | 'keyActionBlue' | 'summary';
 
 interface GroupedExportRow {
     row: GroupedLogsSheetRow;
@@ -1122,6 +1123,58 @@ function buildGroupedExportRows(
             }
         }
 
+        if (row.action === 'KEY_ON') {
+            let keyOffIndex = -1;
+            for (let cursor = index + 1; cursor < sortedRows.length; cursor += 1) {
+                const candidate = sortedRows[cursor];
+                if (!candidate || candidate.isWoHeader || candidate.isWoSummary || candidate.isPauseBanner) {
+                    continue;
+                }
+                if (candidate.action === 'KEY_OFF') {
+                    keyOffIndex = cursor;
+                    break;
+                }
+                if (candidate.action === 'WO_STOP' || candidate.action === 'WO_START') {
+                    break;
+                }
+            }
+
+            if (keyOffIndex > -1) {
+                const keyOffRow = sortedRows[keyOffIndex]!;
+                const onSerial = typeof row.logId === 'number' ? serialNo++ : '';
+                const onBase = buildGroupedBaseRow(row, onSerial, woDetailsMap);
+                onBase.Action = 'KEY_ON';
+                onBase.TIME = formatGroupedTime24(row.logTime);
+                onBase.PLC = '';
+                onBase.JOB = '';
+                onBase.Notes = 'Total Spindle Run Time:';
+
+                const offSerial = typeof keyOffRow.logId === 'number' ? serialNo++ : '';
+                const offBase = buildGroupedBaseRow(keyOffRow, offSerial, woDetailsMap);
+                offBase.Action = 'KEY_OFF';
+                offBase.TIME = formatGroupedTime24(keyOffRow.logTime);
+                offBase.PLC = '';
+                offBase.JOB = '';
+                const keyDurationSec = Math.max(0, Math.round((keyOffRow.timestamp - row.timestamp) / 1000));
+                offBase.Notes = formatDuration(keyDurationSec);
+
+                const pairId = `key-${row.rowId}-${keyOffRow.rowId}`;
+                exportRows.push({
+                    row: onBase,
+                    style: 'keyActionBlue',
+                    pairId,
+                });
+                exportRows.push({
+                    row: offBase,
+                    style: 'keyActionBlue',
+                    pairId,
+                });
+
+                index = keyOffIndex;
+                continue;
+            }
+        }
+
         if (row.action === 'SPINDLE_ON') {
             const groupKey = row.jobBlockLabel?.trim();
             if (groupKey) {
@@ -1321,6 +1374,19 @@ function buildGroupedExportRows(
         index = end;
     }
 
+    let previousOperator = '';
+    for (const exportRow of exportRows) {
+        const action = String(exportRow.row.Action || '').trim();
+        const op = String(exportRow.row.OP || '').trim();
+        if (op) {
+            previousOperator = op;
+            continue;
+        }
+        if ((action === 'KEY_ON' || action === 'KEY_OFF') && previousOperator) {
+            exportRow.row.OP = previousOperator;
+        }
+    }
+
     let displaySerial = 1;
     for (const exportRow of exportRows) {
         if (typeof exportRow.row['Log ID'] === 'number') {
@@ -1426,6 +1492,17 @@ function applyGroupedDataRowStyle(row: Row, exportRow: GroupedExportRow): void {
                 type: 'pattern',
                 pattern: 'solid',
                 fgColor: { argb: LOG_STYLE_COLORS.groupedOrange },
+            };
+        }
+    }
+
+    if (exportRow.style === 'keyActionBlue') {
+        for (const col of [4, 5, 6, 7, 8]) {
+            const cell = row.getCell(col);
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: LOG_STYLE_COLORS.groupedLightBlue },
             };
         }
     }

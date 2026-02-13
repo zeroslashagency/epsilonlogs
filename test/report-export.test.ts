@@ -818,6 +818,159 @@ describe('grouped workbook structure', () => {
     expect(String(groupedSheet?.getCell('H5').value || '')).toContain('Reason - Job completed');
   });
 
+  it('renders KEY_ON/OFF rows with light-blue fill and notes split across pair', async () => {
+    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails()]]);
+    const deviceNameMap = new Map<number, string>([[15, 'VMC - 05']]);
+
+    const keyOn = makeEventRow({
+      rowId: 'log-4318',
+      sNo: 240,
+      logId: 4318,
+      logTime: new Date('2026-02-13T22:19:52'),
+      action: 'KEY_ON',
+      timestamp: new Date('2026-02-13T22:19:52').getTime(),
+      operatorName: 'RamaKrishnan',
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 4318,
+        action: 'KEY_ON',
+      },
+    });
+
+    const keyOff = makeEventRow({
+      rowId: 'log-4319',
+      sNo: 241,
+      logId: 4319,
+      logTime: new Date('2026-02-13T22:19:53'),
+      action: 'KEY_OFF',
+      timestamp: new Date('2026-02-13T22:19:53').getTime(),
+      operatorName: 'RamaKrishnan',
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 4319,
+        action: 'KEY_OFF',
+      },
+    });
+
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [keyOn, keyOff],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap,
+    });
+
+    const groupedSheet = workbook.getWorksheet('Logs Grouped');
+    expect(groupedSheet).toBeDefined();
+
+    expect(groupedSheet?.getCell('D2').value).toBe('KEY_ON');
+    expect(groupedSheet?.getCell('D3').value).toBe('KEY_OFF');
+    expect(groupedSheet?.getCell('H2').value).toBe('Total Spindle Run Time:');
+    expect(groupedSheet?.getCell('H3').value).toBe('1s');
+    expect(groupedSheet?.getCell('I2').value).toBe('RamaKrishnan');
+    expect(groupedSheet?.getCell('I3').value).toBe('RamaKrishnan');
+
+    const keyOnActionFill = groupedSheet?.getCell('D2').fill as { fgColor?: { argb?: string } };
+    const keyOffActionFill = groupedSheet?.getCell('D3').fill as { fgColor?: { argb?: string } };
+    const keyOnNotesFill = groupedSheet?.getCell('H2').fill as { fgColor?: { argb?: string } };
+    const keyOffNotesFill = groupedSheet?.getCell('H3').fill as { fgColor?: { argb?: string } };
+    const serialFill = groupedSheet?.getCell('A2').fill as { fgColor?: { argb?: string } };
+    const opFill = groupedSheet?.getCell('I2').fill as { fgColor?: { argb?: string } };
+
+    expect(keyOnActionFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.groupedLightBlue);
+    expect(keyOffActionFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.groupedLightBlue);
+    expect(keyOnNotesFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.groupedLightBlue);
+    expect(keyOffNotesFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.groupedLightBlue);
+    expect(serialFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.defaultBg);
+    expect(opFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.defaultBg);
+  });
+
+  it('backfills OP for KEY rows from previous operator when missing', async () => {
+    const woDetailsMap = new Map<number, WoDetails>();
+    const deviceNameMap = new Map<number, string>();
+
+    const spindleOn = makeEventRow({
+      rowId: 'log-5001',
+      logId: 5001,
+      logTime: new Date('2026-02-13T19:53:14'),
+      action: 'SPINDLE_ON',
+      label: 'JOB - 04',
+      jobBlockLabel: 'JOB - 04',
+      operatorName: 'PALANISAMY',
+      timestamp: new Date('2026-02-13T19:53:14').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 5001,
+        action: 'SPINDLE_ON',
+        wo_id: 9999,
+        start_name: 'PALANISAMY',
+      },
+    });
+
+    const spindleOff = makeEventRow({
+      rowId: 'log-5002',
+      logId: 5002,
+      logTime: new Date('2026-02-13T19:59:04'),
+      action: 'SPINDLE_OFF',
+      durationSec: 289,
+      durationText: '4m 49s',
+      label: 'JOB - 04',
+      jobBlockLabel: 'JOB - 04',
+      operatorName: 'PALANISAMY',
+      timestamp: new Date('2026-02-13T19:59:04').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 5002,
+        action: 'SPINDLE_OFF',
+        wo_id: 9999,
+        start_name: 'PALANISAMY',
+      },
+    });
+
+    const keyOn = makeEventRow({
+      rowId: 'log-5003',
+      logId: 5003,
+      logTime: new Date('2026-02-13T20:11:41'),
+      action: 'KEY_ON',
+      operatorName: '',
+      timestamp: new Date('2026-02-13T20:11:41').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 5003,
+        action: 'KEY_ON',
+        wo_id: 9999,
+        start_name: '',
+      },
+    });
+
+    const keyOff = makeEventRow({
+      rowId: 'log-5004',
+      logId: 5004,
+      logTime: new Date('2026-02-13T20:11:42'),
+      action: 'KEY_OFF',
+      operatorName: '',
+      timestamp: new Date('2026-02-13T20:11:42').getTime(),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 5004,
+        action: 'KEY_OFF',
+        wo_id: 9999,
+        start_name: '',
+      },
+    });
+
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [spindleOn, spindleOff, keyOn, keyOff],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap,
+    });
+
+    const groupedSheet = workbook.getWorksheet('Logs Grouped');
+    expect(groupedSheet).toBeDefined();
+    expect(groupedSheet?.getCell('I4').value).toBe('PALANISAMY');
+    expect(groupedSheet?.getCell('I5').value).toBe('PALANISAMY');
+  });
+
   it('appends end summary block in grouped sheet footer', async () => {
     const workbook = await buildGroupedExcelWorkbook({
       rows: [],
