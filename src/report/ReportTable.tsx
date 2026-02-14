@@ -7,6 +7,12 @@ function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
 }
 
+function formatHumanEntry(value: string | number | null | undefined, fallback = '—') {
+    const normalized = value === null || value === undefined ? '' : String(value).trim();
+    const display = normalized || fallback;
+    return `" ${display} "`;
+}
+
 interface ReportTableProps {
     rows: ReportRow[];
     loading?: boolean;
@@ -86,7 +92,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                                 <div className="font-mono text-slate-100 text-xs">{s.startTime}</div>
                                                 {s.startComment && (
                                                     <div className="text-[10px] italic text-slate-400 mt-0.5 max-w-[150px] truncate" title={s.startComment}>
-                                                        "{s.startComment}"
+                                                        {formatHumanEntry(s.startComment)}
                                                     </div>
                                                 )}
                                             </div>
@@ -137,7 +143,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                                 <div className="font-mono text-slate-100 text-xs">{s.endTime}</div>
                                                 {s.stopComment && (
                                                     <div className="text-[10px] italic text-slate-400 mt-0.5 max-w-[150px] truncate" title={s.stopComment}>
-                                                        "{s.stopComment}"
+                                                        {formatHumanEntry(s.stopComment)}
                                                     </div>
                                                 )}
                                             </div>
@@ -237,7 +243,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                     ) : row.stopRowData ? (
                                         <div className="flex flex-col space-y-0.5">
                                             <span className="text-emerald-600 font-medium uppercase text-[9px] tracking-wider">OK Qty</span>
-                                            <span className="font-bold text-slate-800 text-[11px] leading-tight">{row.stopRowData.ok}</span>
+                                            <span className="font-bold text-slate-800 text-[11px] leading-tight">{formatHumanEntry(row.stopRowData.ok)}</span>
                                         </div>
                                     ) : null}
                                 </td>
@@ -256,7 +262,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                     ) : row.stopRowData ? (
                                         <div className="flex flex-col space-y-0.5 text-xs text-left">
                                             <span className="text-rose-600 font-medium">Reject Qty:</span>
-                                            <span className="font-bold text-slate-800">{row.stopRowData.reject}</span>
+                                            <span className="font-bold text-slate-800">{formatHumanEntry(row.stopRowData.reject)}</span>
                                         </div>
                                     ) : (
                                         <span className="font-bold">{row.label || ''}</span>
@@ -269,7 +275,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                         <div className="flex flex-col space-y-1">
                                             <div className="flex flex-col space-y-0.5">
                                                 <span className="text-slate-500 font-medium uppercase text-[9px] tracking-wider">Comment</span>
-                                                <span className="italic text-slate-700">"{row.startRowData.comment || '—'}"</span>
+                                                <span className="italic text-slate-700">{formatHumanEntry(row.startRowData.comment)}</span>
                                             </div>
                                             {row.durationText && (
                                                 <span className="font-mono font-bold text-slate-900 border-t border-slate-200 mt-1 pt-0.5 w-fit">⏲ {row.durationText}</span>
@@ -279,7 +285,7 @@ export function ReportTable({ rows, loading }: ReportTableProps) {
                                         <div className="flex flex-col space-y-1">
                                             <div className="flex flex-col space-y-0.5">
                                                 <span className="text-slate-500 font-medium uppercase text-[9px] tracking-wider">Stop Reason</span>
-                                                <span className="font-medium text-slate-800">{row.stopRowData.reason || '—'}</span>
+                                                <span className="font-medium text-slate-800">{formatHumanEntry(row.stopRowData.reason)}</span>
                                             </div>
                                             {row.durationText && (
                                                 <span className="font-mono font-bold text-slate-900 border-t border-slate-200 mt-1 pt-0.5 w-fit">⏲ {row.durationText}</span>
