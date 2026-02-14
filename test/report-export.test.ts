@@ -1127,22 +1127,22 @@ describe('grouped workbook structure', () => {
     const groupedSheet = workbook.getWorksheet('Logs Grouped');
     expect(groupedSheet).toBeDefined();
 
-    expect(groupedSheet?.getCell('A3').value).toBe('End Summary Block');
-    expect(groupedSheet?.getCell('A4').value).toBe('Start Time : 09/02/2026, 11:00 AM');
-    expect(groupedSheet?.getCell('A5').value).toBe('End Time   : 09/02/2026, 05:00 PM');
-    expect(groupedSheet?.getCell('A6').value).toBe('Generate Report');
-    expect(groupedSheet?.getCell('A7').value).toBe('Total Time Selected for reports : 00:04:20');
-    expect(groupedSheet?.getCell('A8').value).toBe('Total Cutting Run Time          : 00:03:20');
-    expect(groupedSheet?.getCell('A9').value).toBe('Loading unloading Time          : 00:00:20');
-    expect(groupedSheet?.getCell('A10').value).toBe('Total Pause Time                : 00:00:30');
-    expect(groupedSheet?.getCell('A11').value).toBe('Others                          : 00:00:10');
-    expect(groupedSheet?.getCell('G4').value).toBe('Cutting   : 76.9% (00:03:20)');
-    expect(groupedSheet?.getCell('G5').value).toBe('Loading   : 7.7% (00:00:20)');
-    expect(groupedSheet?.getCell('G6').value).toBe('Pause     : 11.5% (00:00:30)');
-    expect(groupedSheet?.getCell('G7').value).toBe('Others    : 3.8% (00:00:10)');
-    expect(groupedSheet?.getCell('G8').value).toBe('Remaining : 0.0% (00:00:00)');
-    expect(groupedSheet?.getCell('A13').value).toBe('Bottom Chart');
-    expect(String(groupedSheet?.getCell('A14').value || '')).toContain('Cutting');
+    expect(groupedSheet?.getCell('A3').value).toBe('END SUMMARY');
+    expect(groupedSheet?.getCell('B3').value).toBe('RPT');
+    expect(groupedSheet?.getCell('C3').value).toBe('09/02/2026, 11:00 AM to 09/02/2026, 05:00 PM');
+    expect(groupedSheet?.getCell('D3').value).toBe('Total Time Selected: 00:04:20');
+    expect(groupedSheet?.getCell('E3').value).toBe('00:03:20');
+    expect(groupedSheet?.getCell('F3').value).toBe('00:00:20');
+    expect(groupedSheet?.getCell('G3').value).toBe('00:00:30');
+    expect(groupedSheet?.getCell('H3').value).toBe('00:00:10');
+    expect(groupedSheet?.getCell('I3').value).toBe('SYSTEM');
+
+    const actionFill = groupedSheet?.getCell('D3').fill as { fgColor?: { argb?: string } };
+    const timeFill = groupedSheet?.getCell('E3').fill as { fgColor?: { argb?: string } };
+    const notesFill = groupedSheet?.getCell('H3').fill as { fgColor?: { argb?: string } };
+    expect(actionFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.groupedYellow);
+    expect(timeFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.groupedGreen);
+    expect(notesFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.pauseActionBg);
   });
 });
 

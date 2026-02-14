@@ -1688,104 +1688,63 @@ function addGroupedEndSummaryBlock(worksheet: Worksheet, input: ExcelExportInput
     const blockStartRow = worksheet.rowCount + 2;
     const range = resolveGroupedSummaryRange(input.rows, input.reportConfig);
 
-    const totalSelectedSec = Math.max(0, Math.round(input.stats.totalWoDurationSec || 0));
-    const cuttingSec = Math.max(0, Math.round(input.stats.totalCuttingSec || 0));
-    const loadingSec = Math.max(0, Math.round(input.stats.totalLoadingUnloadingSec || 0));
-    const pauseSec = Math.max(0, Math.round(input.stats.totalPauseSec || 0));
-    const othersSec = Math.max(0, Math.round(input.stats.totalIdleSec || 0));
-    const remainingSec = Math.max(0, totalSelectedSec - (cuttingSec + loadingSec + pauseSec + othersSec));
-
-    const toPct = (seconds: number): string => {
-        if (totalSelectedSec <= 0) return '0.0%';
-        return `${((seconds / totalSelectedSec) * 100).toFixed(1)}%`;
+    const summaryRow: GroupedLogsSheetRow = {
+        'S.No': '',
+        'Log ID': '',
+        'Log Time': `${range.startText} to ${range.endText}`,
+        Action: `Total Time Selected: ${formatSecondsToClockPadded(input.stats.totalWoDurationSec)}`,
+        TIME: formatSecondsToClockPadded(input.stats.totalCuttingSec),
+        PLC: formatSecondsToClockPadded(input.stats.totalLoadingUnloadingSec),
+        JOB: formatSecondsToClockPadded(input.stats.totalPauseSec),
+        Notes: formatSecondsToClockPadded(input.stats.totalIdleSec),
+        OP: 'SYSTEM',
     };
 
-    const toBar = (seconds: number): string => {
-        const pct = totalSelectedSec > 0 ? (seconds / totalSelectedSec) : 0;
-        const filled = Math.max(0, Math.min(20, Math.round(pct * 20)));
-        return `${'#'.repeat(filled)}${'-'.repeat(20 - filled)}`;
+    const row = worksheet.insertRow(blockStartRow, summaryRow);
+    row.height = 26;
+    row.getCell(1).value = 'END SUMMARY';
+    row.getCell(2).value = 'RPT';
+
+    for (let col = 1; col <= GROUPED_LOG_SHEET_HEADERS.length; col += 1) {
+        const cell = row.getCell(col);
+        cell.font = {
+            color: { argb: LOG_STYLE_COLORS.darkText },
+            bold: col >= 4 && col <= 8,
+        };
+        cell.alignment = {
+            vertical: 'middle',
+            horizontal: col === 3 || col === 4 || col === 8 ? 'left' : 'center',
+            wrapText: false,
+        };
+        cell.border = {
+            top: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            left: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            bottom: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+            right: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
+        };
+    }
+
+    const fillsByColumn: Record<number, string> = {
+        1: LOG_STYLE_COLORS.groupedSummaryBg,
+        2: LOG_STYLE_COLORS.groupedSummaryBg,
+        3: LOG_STYLE_COLORS.defaultBg,
+        4: LOG_STYLE_COLORS.groupedYellow,
+        5: LOG_STYLE_COLORS.groupedGreen,
+        6: LOG_STYLE_COLORS.groupedLightBlue,
+        7: LOG_STYLE_COLORS.groupedOrange,
+        8: LOG_STYLE_COLORS.pauseActionBg,
+        9: LOG_STYLE_COLORS.defaultBg,
     };
 
-    const leftLines: Array<{ text: string; bold?: boolean }> = [
-        { text: `Start Time : ${range.startText}` },
-        { text: `End Time   : ${range.endText}` },
-        { text: 'Generate Report', bold: true },
-        { text: `Total Time Selected for reports : ${formatSecondsToClockPadded(totalSelectedSec)}` },
-        { text: `Total Cutting Run Time          : ${formatSecondsToClockPadded(cuttingSec)}` },
-        { text: `Loading unloading Time          : ${formatSecondsToClockPadded(loadingSec)}` },
-        { text: `Total Pause Time                : ${formatSecondsToClockPadded(pauseSec)}` },
-        { text: `Others                          : ${formatSecondsToClockPadded(othersSec)}` },
-    ];
-
-    const rightLines = [
-        `Cutting   : ${toPct(cuttingSec)} (${formatSecondsToClockPadded(cuttingSec)})`,
-        `Loading   : ${toPct(loadingSec)} (${formatSecondsToClockPadded(loadingSec)})`,
-        `Pause     : ${toPct(pauseSec)} (${formatSecondsToClockPadded(pauseSec)})`,
-        `Others    : ${toPct(othersSec)} (${formatSecondsToClockPadded(othersSec)})`,
-        `Remaining : ${toPct(remainingSec)} (${formatSecondsToClockPadded(remainingSec)})`,
-    ];
-
-    worksheet.mergeCells(`A${blockStartRow}:I${blockStartRow}`);
-    const titleCell = worksheet.getCell(`A${blockStartRow}`);
-    titleCell.value = 'End Summary Block';
-    titleCell.font = { bold: true, color: { argb: LOG_STYLE_COLORS.whiteText } };
-    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOG_STYLE_COLORS.groupedSummaryBg } };
-    titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
-
-    for (let i = 0; i < leftLines.length; i += 1) {
-        const rowNumber = blockStartRow + 1 + i;
-        worksheet.mergeCells(`A${rowNumber}:F${rowNumber}`);
-        const leftCell = worksheet.getCell(`A${rowNumber}`);
-        leftCell.value = leftLines[i]!.text;
-        leftCell.font = { bold: Boolean(leftLines[i]!.bold), color: { argb: LOG_STYLE_COLORS.darkText } };
-        leftCell.alignment = { vertical: 'middle', horizontal: 'left' };
-
-        worksheet.mergeCells(`G${rowNumber}:I${rowNumber}`);
-        const rightCell = worksheet.getCell(`G${rowNumber}`);
-        rightCell.value = rightLines[i] || '';
-        rightCell.font = { color: { argb: LOG_STYLE_COLORS.darkText } };
-        rightCell.alignment = { vertical: 'middle', horizontal: 'left' };
-        rightCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LOG_STYLE_COLORS.keyActionBg } };
+    for (let col = 1; col <= GROUPED_LOG_SHEET_HEADERS.length; col += 1) {
+        const cell = row.getCell(col);
+        cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: fillsByColumn[col] || LOG_STYLE_COLORS.defaultBg },
+        };
     }
 
-    const chartTitleRow = blockStartRow + 1 + leftLines.length + 1;
-    worksheet.mergeCells(`A${chartTitleRow}:I${chartTitleRow}`);
-    const chartTitleCell = worksheet.getCell(`A${chartTitleRow}`);
-    chartTitleCell.value = 'Bottom Chart';
-    chartTitleCell.font = { bold: true, color: { argb: LOG_STYLE_COLORS.darkText } };
-    chartTitleCell.alignment = { vertical: 'middle', horizontal: 'left' };
-
-    const chartRows = [
-        { label: 'Cutting', sec: cuttingSec, color: LOG_STYLE_COLORS.groupedGreen },
-        { label: 'Loading', sec: loadingSec, color: LOG_STYLE_COLORS.groupedLightBlue },
-        { label: 'Pause', sec: pauseSec, color: LOG_STYLE_COLORS.groupedOrange },
-        { label: 'Others', sec: othersSec, color: LOG_STYLE_COLORS.groupedBeige },
-        { label: 'Remaining', sec: remainingSec, color: LOG_STYLE_COLORS.sectionHeader },
-    ];
-
-    for (let i = 0; i < chartRows.length; i += 1) {
-        const rowNumber = chartTitleRow + 1 + i;
-        const item = chartRows[i]!;
-        worksheet.mergeCells(`A${rowNumber}:I${rowNumber}`);
-        const cell = worksheet.getCell(`A${rowNumber}`);
-        cell.value = `${item.label.padEnd(10, ' ')} ${toBar(item.sec)} ${toPct(item.sec)} (${formatSecondsToClockPadded(item.sec)})`;
-        cell.alignment = { vertical: 'middle', horizontal: 'left' };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: item.color } };
-        cell.font = { color: { argb: LOG_STYLE_COLORS.darkText } };
-    }
-
-    const finalRow = chartTitleRow + 1 + chartRows.length;
-    for (let rowNumber = blockStartRow; rowNumber <= finalRow; rowNumber += 1) {
-        for (let col = 1; col <= GROUPED_LOG_SHEET_HEADERS.length; col += 1) {
-            const cell = worksheet.getCell(`${toExcelColumnName(col)}${rowNumber}`);
-            cell.border = {
-                top: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
-                left: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
-                bottom: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
-                right: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
-            };
-        }
-    }
 }
 
 function addGroupedLogsSheet(workbook: Workbook, input: ExcelExportInput): void {
