@@ -863,6 +863,64 @@ function formatSecondsToClockPadded(seconds: number | undefined): string {
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+function formatSignedSecondsToClock(seconds: number): string {
+    const sign = seconds < 0 ? '-' : '';
+    const abs = Math.abs(Math.round(seconds));
+    const hours = Math.floor(abs / 3600);
+    const minutes = Math.floor((abs % 3600) / 60);
+    const secs = abs % 60;
+    return `${sign}${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function parseReportConfigDate(value: string): Date | null {
+    const text = String(value || '').trim();
+    if (!text) return null;
+
+    const dashMatch = text.match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})$/);
+    if (dashMatch) {
+        const [, dd, mm, yyyy, hh, min] = dashMatch;
+        const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(min), 0, 0);
+        return Number.isFinite(date.getTime()) ? date : null;
+    }
+
+    const parsed = new Date(text);
+    if (Number.isFinite(parsed.getTime())) {
+        return parsed;
+    }
+    return null;
+}
+
+function computeInputWindowSeconds(reportConfig?: Pick<ReportConfig, 'startDate' | 'endDate'>): number | null {
+    const start = parseReportConfigDate(String(reportConfig?.startDate ?? ''));
+    const end = parseReportConfigDate(String(reportConfig?.endDate ?? ''));
+    if (!start || !end) {
+        return null;
+    }
+    const diff = Math.round((end.getTime() - start.getTime()) / 1000);
+    return Number.isFinite(diff) ? diff : null;
+}
+
+function computeKeyActiveSeconds(rows: ReportRow[]): number {
+    const sorted = [...rows].sort((a, b) => a.timestamp - b.timestamp);
+    let activeStart: number | null = null;
+    let total = 0;
+
+    for (const row of sorted) {
+        if (row.action === 'KEY_ON') {
+            if (activeStart === null) {
+                activeStart = row.timestamp;
+            }
+            continue;
+        }
+        if (row.action === 'KEY_OFF' && activeStart !== null) {
+            total += Math.max(0, Math.round((row.timestamp - activeStart) / 1000));
+            activeStart = null;
+        }
+    }
+
+    return total;
+}
+
 function normalizeGroupedJobLabel(label: string): string {
     const trimmed = label.trim();
     const matched = trimmed.match(/^job\s*-\s*0*(\d+)$/i);
@@ -1687,17 +1745,26 @@ function resolveGroupedSummaryRange(rows: ReportRow[], reportConfig?: Pick<Repor
 function addGroupedEndSummaryBlock(worksheet: Worksheet, input: ExcelExportInput): void {
     const blockStartRow = worksheet.rowCount + 2;
     const range = resolveGroupedSummaryRange(input.rows, input.reportConfig);
+    const inputWindowSec = computeInputWindowSeconds(input.reportConfig);
+    const inputTotalSec = inputWindowSec ?? Math.max(0, Math.round(input.stats.totalWoDurationSec || 0));
+    const keyActiveSec = computeKeyActiveSeconds(input.rows);
+    const classifiedSec = Math.max(0, Math.round(input.stats.totalCuttingSec || 0))
+        + Math.max(0, Math.round(input.stats.totalLoadingUnloadingSec || 0))
+        + Math.max(0, Math.round(input.stats.totalPauseSec || 0))
+        + keyActiveSec;
+    const remainingSec = inputTotalSec - classifiedSec;
+    const status = remainingSec === 0 ? 'OK' : 'CHECK';
 
     const summaryRow: GroupedLogsSheetRow = {
         'S.No': '',
         'Log ID': '',
         'Log Time': `${range.startText} to ${range.endText}`,
-        Action: `Total Time Selected: ${formatSecondsToClockPadded(input.stats.totalWoDurationSec)}`,
-        TIME: formatSecondsToClockPadded(input.stats.totalCuttingSec),
-        PLC: formatSecondsToClockPadded(input.stats.totalLoadingUnloadingSec),
-        JOB: formatSecondsToClockPadded(input.stats.totalPauseSec),
-        Notes: formatSecondsToClockPadded(input.stats.totalIdleSec),
-        OP: 'SYSTEM',
+        Action: `Input Total: ${formatSecondsToClockPadded(inputTotalSec)}`,
+        TIME: `Cutting: ${formatSecondsToClockPadded(input.stats.totalCuttingSec)}`,
+        PLC: `Loading: ${formatSecondsToClockPadded(input.stats.totalLoadingUnloadingSec)}`,
+        JOB: `Pause: ${formatSecondsToClockPadded(input.stats.totalPauseSec)}`,
+        Notes: `Key: ${formatSecondsToClockPadded(keyActiveSec)} | Cls: ${formatSecondsToClockPadded(classifiedSec)} | Rem: ${formatSignedSecondsToClock(remainingSec)}`,
+        OP: status,
     };
 
     const row = worksheet.insertRow(blockStartRow, summaryRow);

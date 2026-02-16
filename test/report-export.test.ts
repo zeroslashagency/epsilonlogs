@@ -1130,12 +1130,12 @@ describe('grouped workbook structure', () => {
     expect(groupedSheet?.getCell('A3').value).toBe('END SUMMARY');
     expect(groupedSheet?.getCell('B3').value).toBe('RPT');
     expect(groupedSheet?.getCell('C3').value).toBe('09/02/2026, 11:00 AM to 09/02/2026, 05:00 PM');
-    expect(groupedSheet?.getCell('D3').value).toBe('Total Time Selected: 00:04:20');
-    expect(groupedSheet?.getCell('E3').value).toBe('00:03:20');
-    expect(groupedSheet?.getCell('F3').value).toBe('00:00:20');
-    expect(groupedSheet?.getCell('G3').value).toBe('00:00:30');
-    expect(groupedSheet?.getCell('H3').value).toBe('00:00:10');
-    expect(groupedSheet?.getCell('I3').value).toBe('SYSTEM');
+    expect(groupedSheet?.getCell('D3').value).toBe('Input Total: 06:00:00');
+    expect(groupedSheet?.getCell('E3').value).toBe('Cutting: 00:03:20');
+    expect(groupedSheet?.getCell('F3').value).toBe('Loading: 00:00:20');
+    expect(groupedSheet?.getCell('G3').value).toBe('Pause: 00:00:30');
+    expect(groupedSheet?.getCell('H3').value).toBe('Key: 00:00:00 | Cls: 00:04:10 | Rem: 05:55:50');
+    expect(groupedSheet?.getCell('I3').value).toBe('CHECK');
 
     const actionFill = groupedSheet?.getCell('D3').fill as { fgColor?: { argb?: string } };
     const timeFill = groupedSheet?.getCell('E3').fill as { fgColor?: { argb?: string } };
