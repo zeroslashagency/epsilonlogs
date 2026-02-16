@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeftRight, ArrowLeft, RefreshCcw, Filter, AlertTriangle, Activity, Zap, CheckCircle2, Clock } from "lucide-react";
+import { ArrowLeftRight, ArrowLeft, RefreshCcw, Filter, AlertTriangle, Activity, Zap, CheckCircle2, Clock, Search, X } from "lucide-react";
 import { DateRangePicker } from "../components/ui/DateRangePicker";
 import { fetchAllWoDetails, fetchDeviceLogs } from "../report/api-client";
 import { extractWoIds } from "../report/log-normalizer";
@@ -174,6 +174,13 @@ export default function ReportPageV2() {
         }));
     };
 
+    const setSearchQuery = (query: string) => {
+        setFilterState((previous) => ({
+            ...previous,
+            searchQuery: query,
+        }));
+    };
+
     const resetFilters = () => {
         setFilterState(DEFAULT_REPORT_V2_FILTER_STATE);
     };
@@ -240,17 +247,38 @@ export default function ReportPageV2() {
                     </div>
 
                     <div className="rounded-xl border border-slate-700 bg-slate-950/80 p-3 md:p-4 space-y-3">
+                        {/* Search Input for V2 */}
+                        <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <Search className="h-4 w-4 text-slate-500" />
+                            </div>
+                            <input
+                                type="text"
+                                value={filterState.searchQuery || ""}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Search Operator, WO, Job..."
+                                className="w-full pl-9 pr-9 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-slate-200 placeholder:text-slate-600 focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500/50 outline-none transition-all"
+                            />
+                            {filterState.searchQuery && (
+                                <button
+                                    onClick={() => setSearchQuery("")}
+                                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-slate-300 transition-colors"
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            )}
+                        </div>
+
                         <div className="flex flex-wrap items-center gap-2">
                             <Filter className="h-4 w-4 text-slate-400" />
                             {(["GOOD_ONLY", "GOOD_WARNING", "ALL"] as const).map((mode) => (
                                 <button
                                     key={mode}
                                     onClick={() => setMode(mode)}
-                                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                                        filterState.mode === mode
+                                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${filterState.mode === mode
                                             ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/50"
                                             : "bg-slate-800 text-slate-300 ring-1 ring-slate-700 hover:bg-slate-700"
-                                    }`}
+                                        }`}
                                 >
                                     {getModeLabel(mode)}
                                 </button>
@@ -314,7 +342,7 @@ export default function ReportPageV2() {
                     <div className="flex flex-wrap items-center gap-3">
                         <span className="inline-flex items-center gap-1">
                             <Activity className="h-3.5 w-3.5" />
-                            Filtered rows: {filteredRows.length}
+                            Filtered rows: {filteredRows.length} {filterState.searchQuery && `(matched "${filterState.searchQuery}")`}
                         </span>
                         <span className="inline-flex items-center gap-1">
                             <Zap className="h-3.5 w-3.5" />

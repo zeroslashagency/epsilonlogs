@@ -3,12 +3,15 @@ import { buildThresholdWindow } from "../threshold";
 import { ReportConfig, ReportRow, ReportStats, WoDetails } from "./report-types";
 import { buildReport } from "./report-builder";
 
+import { matchRow } from "./search-utils";
+
 export type RowClassification = "GOOD" | "WARNING" | "BAD" | "UNKNOWN";
 
 export interface ReportV2FilterState {
     mode: "GOOD_ONLY" | "GOOD_WARNING" | "ALL";
     includeUnknown: boolean;
     includeBreakExtensions: boolean;
+    searchQuery: string;
 }
 
 export interface ClassificationCounts {
@@ -60,6 +63,7 @@ export const DEFAULT_REPORT_V2_FILTER_STATE: ReportV2FilterState = {
     mode: "GOOD_ONLY",
     includeUnknown: false,
     includeBreakExtensions: false,
+    searchQuery: "",
 };
 
 const createEmptyCounts = (): ClassificationCounts => ({
@@ -212,29 +216,36 @@ const decorateRowClassification = (
 
 const getRowClassification = (row: ReportRow): RowClassification => row.classification || "UNKNOWN";
 
+// Duplicate removed. The Interface and Default State are defined at the top of the file.
+
 export function applyReportV2Filters(
-    rows: ReportRow[],
-    filterState: ReportV2FilterState = DEFAULT_REPORT_V2_FILTER_STATE,
+    allRows: ReportRow[],
+    state: ReportV2FilterState
 ): ReportRow[] {
-    return rows.filter((row) => {
-        const classification = getRowClassification(row);
-
-        if (classification === "UNKNOWN") {
-            if (isBreakLikeRow(row)) {
-                return filterState.includeBreakExtensions;
-            }
-            return filterState.includeUnknown;
+    return allRows.filter((row) => {
+        // 1. Filter by Mode (Classification)
+        if (state.mode === "GOOD_ONLY") {
+            if (row.classification !== "GOOD") return false;
+        } else if (state.mode === "GOOD_WARNING") {
+            if (row.classification !== "GOOD" && row.classification !== "WARNING") return false;
         }
 
-        if (filterState.mode === "GOOD_ONLY") {
-            return classification === "GOOD";
+        // 2. Filter Unknowns
+        if (!state.includeUnknown) {
+            if (row.classification === "UNKNOWN") return false;
         }
 
-        if (filterState.mode === "GOOD_WARNING") {
-            return classification === "GOOD" || classification === "WARNING";
+        // 3. Filter Break / Extensions
+        if (!state.includeBreakExtensions) {
+            if (row.isPauseBanner) return false;
         }
 
-        return classification === "GOOD" || classification === "WARNING" || classification === "BAD";
+        // 4. Search Filter
+        if (state.searchQuery && state.searchQuery.trim() !== "") {
+            if (!matchRow(row, state.searchQuery)) return false;
+        }
+
+        return true;
     });
 }
 

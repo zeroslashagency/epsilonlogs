@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { ArrowLeft, ArrowLeftRight, FileText, Download, Play, Activity, Users, Package, Timer, Coffee, Loader2, BarChart3, Zap } from 'lucide-react';
+import { ArrowLeft, ArrowLeftRight, FileText, Download, Play, Activity, Users, Package, Timer, Coffee, Loader2, BarChart3, Zap, Search, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { ReportTable } from './ReportTable';
 import { ReportConfig, ReportRow, ReportStats, WoDetails } from './report-types';
@@ -8,6 +8,7 @@ import { buildReport } from './report-builder';
 import { extractWoIds } from './log-normalizer';
 import { formatDuration } from './format-utils';
 import { DateRangePicker } from '../components/ui/DateRangePicker';
+import { matchRow } from './search-utils';
 
 const TOKEN = import.meta.env.VITE_API_TOKEN;
 
@@ -28,7 +29,14 @@ export default function ReportPage() {
     const [deviceNameMap, setDeviceNameMap] = useState<Map<number, string>>(new Map());
     const [error, setError] = useState<string | null>(null);
     const [exportingGroupedExcel, setExportingGroupedExcel] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
     const reportExportRef = useRef<HTMLDivElement | null>(null);
+
+    // Filter rows based on search query
+    const filteredRows = React.useMemo(() => {
+        if (!searchQuery.trim()) return rows;
+        return rows.filter(row => matchRow(row, searchQuery));
+    }, [rows, searchQuery]);
 
     const handleGenerate = async () => {
         setLoading(true);
@@ -103,6 +111,31 @@ export default function ReportPage() {
                         />
                     </div>
 
+                    {/* Search Input */}
+                    <div className="relative">
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Search Filter</label>
+                        <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <Search className="h-4 w-4 text-slate-400" />
+                            </div>
+                            <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Operator, WO, Job..."
+                                className="w-full pl-10 pr-10 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                            />
+                            {searchQuery && (
+                                <button
+                                    onClick={() => setSearchQuery("")}
+                                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
                     {/* Date Range Picker */}
                     <div className="md:col-span-2">
                         <DateRangePicker
@@ -132,246 +165,251 @@ export default function ReportPage() {
                 {
                     stats && (
                         <div className="space-y-5">
-                        {/* Section Header + Export Buttons */}
-                        <div className="flex items-center justify-between">
-                            <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
-                                <BarChart3 className="h-5 w-5 text-indigo-600" />
-                                Results Analysis
-                            </h2>
-                            <div className="flex items-center gap-3" data-pdf-exclude="true">
-                                <button
-                                    onClick={async () => {
-                                        try {
-                                            const { exportToExcel } = await import('./export-utils');
-                                            if (!stats) return;
-                                            await exportToExcel({
-                                                rows,
-                                                stats,
-                                                woDetailsMap,
-                                                deviceNameMap,
-                                                reportConfig: config,
-                                            });
-                                        } catch (err: unknown) {
-                                            const message = err instanceof Error ? err.message : 'Excel export failed.';
-                                            setError(message);
-                                        }
-                                    }}
-                                    className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium"
-                                >
-                                    <Download className="h-4 w-4" />
-                                    Export Excel
-                                </button>
-                                <button
-                                    onClick={async () => {
-                                        try {
-                                            setExportingGroupedExcel(true);
-                                            const { exportToGroupedExcel } = await import('./export-utils');
-                                            if (!stats) return;
-                                            await exportToGroupedExcel({
-                                                rows,
-                                                stats,
-                                                woDetailsMap,
-                                                deviceNameMap,
-                                                reportConfig: config,
-                                            });
-                                        } catch (err: unknown) {
-                                            const message = err instanceof Error ? err.message : 'Grouped Excel export failed.';
-                                            setError(message);
-                                        } finally {
-                                            setExportingGroupedExcel(false);
-                                        }
-                                    }}
-                                    disabled={exportingGroupedExcel}
-                                    className="flex items-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded-lg hover:bg-cyan-700 transition-colors text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-                                >
-                                    {exportingGroupedExcel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                                    {exportingGroupedExcel ? 'Exporting Grouped...' : 'Export Excel Grouped'}
-                                </button>
-                                <button
-                                    onClick={async () => {
-                                        try {
-                                            if (!reportExportRef.current) {
-                                                throw new Error('Report is not ready for PDF export.');
+                            {/* Section Header + Export Buttons */}
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                                    <BarChart3 className="h-5 w-5 text-indigo-600" />
+                                    Results Analysis
+                                </h2>
+                                <div className="flex items-center gap-3" data-pdf-exclude="true">
+                                    <button
+                                        onClick={async () => {
+                                            try {
+                                                const { exportToExcel } = await import('./export-utils');
+                                                if (!stats) return;
+                                                await exportToExcel({
+                                                    rows: filteredRows,
+                                                    stats,
+                                                    woDetailsMap,
+                                                    deviceNameMap,
+                                                    reportConfig: config,
+                                                });
+                                            } catch (err: unknown) {
+                                                const message = err instanceof Error ? err.message : 'Excel export failed.';
+                                                setError(message);
                                             }
-                                            const { exportToPDF } = await import('./export-utils');
-                                            await exportToPDF({
-                                                sourceElement: reportExportRef.current,
-                                            });
-                                        } catch (err: unknown) {
-                                            const message = err instanceof Error ? err.message : 'PDF export failed.';
-                                            setError(message);
-                                        }
-                                    }}
-                                    className="flex items-center gap-2 bg-rose-600 text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-medium"
-                                >
-                                    <Download className="h-4 w-4" />
-                                    Export PDF
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* Panel A: KPI Cards — Row 1 */}
-                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
-                            <KpiCard
-                                icon={<FileText className="h-4 w-4" />}
-                                label="Total Logs"
-                                value={String(stats.totalLogs)}
-                                color="slate"
-                            />
-                            <KpiCard
-                                icon={<Activity className="h-4 w-4" />}
-                                label="Total Jobs"
-                                value={String(stats.totalJobs)}
-                                color="emerald"
-                            />
-                            <KpiCard
-                                icon={<Zap className="h-4 w-4" />}
-                                label="Total Cycles"
-                                value={String(stats.totalCycles)}
-                                color="indigo"
-                            />
-                            <KpiCard
-                                icon={<Timer className="h-4 w-4" />}
-                                label="Cutting Time"
-                                value={formatDuration(stats.totalCuttingSec)}
-                                color="blue"
-                            />
-                            <KpiCard
-                                icon={<Coffee className="h-4 w-4" />}
-                                label="Pause / Break"
-                                value={formatDuration(stats.totalPauseSec)}
-                                color="amber"
-                            />
-                            <KpiCard
-                                icon={<Loader2 className="h-4 w-4" />}
-                                label="Loading Time"
-                                value={formatDuration(stats.totalLoadingUnloadingSec)}
-                                color="slate"
-                            />
-                            <UtilizationCard utilization={stats.machineUtilization} />
-                        </div>
-
-                        {/* Panel B: Production Quality */}
-                        <div className="bg-white rounded-xl border shadow-sm p-4">
-                            <h3 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
-                                <Package className="h-4 w-4 text-slate-500" />
-                                Production Quality
-                            </h3>
-                            <div className="grid grid-cols-3 gap-4">
-                                <div className="text-center p-3 bg-blue-50 rounded-lg border border-blue-100">
-                                    <div className="text-xs text-blue-500 font-medium uppercase tracking-wide">Allotted Qty</div>
-                                    <div className="text-2xl font-bold text-blue-700 mt-1">{stats.totalAllotedQty}</div>
-                                </div>
-                                <div className="text-center p-3 bg-emerald-50 rounded-lg border border-emerald-100">
-                                    <div className="text-xs text-emerald-500 font-medium uppercase tracking-wide">OK Qty</div>
-                                    <div className="text-2xl font-bold text-emerald-700 mt-1">{stats.totalOkQty}</div>
-                                </div>
-                                <div className={`text-center p-3 rounded-lg border ${stats.totalRejectQty > 0 ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
-                                    <div className={`text-xs font-medium uppercase tracking-wide ${stats.totalRejectQty > 0 ? 'text-red-500' : 'text-slate-500'}`}>Reject Qty</div>
-                                    <div className={`text-2xl font-bold mt-1 ${stats.totalRejectQty > 0 ? 'text-red-700' : 'text-slate-700'}`}>{stats.totalRejectQty}</div>
+                                        }}
+                                        className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium"
+                                    >
+                                        <Download className="h-4 w-4" />
+                                        Export Excel
+                                    </button>
+                                    <button
+                                        onClick={async () => {
+                                            try {
+                                                setExportingGroupedExcel(true);
+                                                const { exportToGroupedExcel } = await import('./export-utils');
+                                                if (!stats) return;
+                                                await exportToGroupedExcel({
+                                                    rows: filteredRows,
+                                                    stats,
+                                                    woDetailsMap,
+                                                    deviceNameMap,
+                                                    reportConfig: config,
+                                                });
+                                            } catch (err: unknown) {
+                                                const message = err instanceof Error ? err.message : 'Grouped Excel export failed.';
+                                                setError(message);
+                                            } finally {
+                                                setExportingGroupedExcel(false);
+                                            }
+                                        }}
+                                        disabled={exportingGroupedExcel}
+                                        className="flex items-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded-lg hover:bg-cyan-700 transition-colors text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                                    >
+                                        {exportingGroupedExcel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                                        {exportingGroupedExcel ? 'Exporting Grouped...' : 'Export Excel Grouped'}
+                                    </button>
+                                    <button
+                                        onClick={async () => {
+                                            try {
+                                                if (!reportExportRef.current) {
+                                                    throw new Error('Report is not ready for PDF export.');
+                                                }
+                                                const { exportToPDF } = await import('./export-utils');
+                                                await exportToPDF({
+                                                    sourceElement: reportExportRef.current,
+                                                });
+                                            } catch (err: unknown) {
+                                                const message = err instanceof Error ? err.message : 'PDF export failed.';
+                                                setError(message);
+                                            }
+                                        }}
+                                        className="flex items-center gap-2 bg-rose-600 text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-medium"
+                                    >
+                                        <Download className="h-4 w-4" />
+                                        Export PDF
+                                    </button>
                                 </div>
                             </div>
-                        </div>
 
-                        {/* Panel C: WO Breakdown Table */}
-                        {stats.woBreakdowns.length > 0 && (
-                            <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-                                <div className="px-4 py-3 border-b bg-slate-50">
-                                    <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                                        <FileText className="h-4 w-4 text-indigo-500" />
-                                        Work Order Breakdown
-                                    </h3>
+                            {/* Panel A: KPI Cards — Row 1 */}
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
+                                <KpiCard
+                                    icon={<FileText className="h-4 w-4" />}
+                                    label="Total Logs"
+                                    value={String(stats.totalLogs)}
+                                    color="slate"
+                                />
+                                <KpiCard
+                                    icon={<Activity className="h-4 w-4" />}
+                                    label="Total Jobs"
+                                    value={String(stats.totalJobs)}
+                                    color="emerald"
+                                />
+                                <KpiCard
+                                    icon={<Zap className="h-4 w-4" />}
+                                    label="Total Cycles"
+                                    value={String(stats.totalCycles)}
+                                    color="indigo"
+                                />
+                                <KpiCard
+                                    icon={<Timer className="h-4 w-4" />}
+                                    label="Cutting Time"
+                                    value={formatDuration(stats.totalCuttingSec)}
+                                    color="blue"
+                                />
+                                <KpiCard
+                                    icon={<Coffee className="h-4 w-4" />}
+                                    label="Pause / Break"
+                                    value={formatDuration(stats.totalPauseSec)}
+                                    color="amber"
+                                />
+                                <KpiCard
+                                    icon={<Loader2 className="h-4 w-4" />}
+                                    label="Loading Time"
+                                    value={formatDuration(stats.totalLoadingUnloadingSec)}
+                                    color="slate"
+                                />
+                                <UtilizationCard utilization={stats.machineUtilization} />
+                            </div>
+
+                            {/* Panel B: Production Quality */}
+                            <div className="bg-white rounded-xl border shadow-sm p-4">
+                                <h3 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
+                                    <Package className="h-4 w-4 text-slate-500" />
+                                    Production Quality
+                                </h3>
+                                <div className="grid grid-cols-3 gap-4">
+                                    <div className="text-center p-3 bg-blue-50 rounded-lg border border-blue-100">
+                                        <div className="text-xs text-blue-500 font-medium uppercase tracking-wide">Allotted Qty</div>
+                                        <div className="text-2xl font-bold text-blue-700 mt-1">{stats.totalAllotedQty}</div>
+                                    </div>
+                                    <div className="text-center p-3 bg-emerald-50 rounded-lg border border-emerald-100">
+                                        <div className="text-xs text-emerald-500 font-medium uppercase tracking-wide">OK Qty</div>
+                                        <div className="text-2xl font-bold text-emerald-700 mt-1">{stats.totalOkQty}</div>
+                                    </div>
+                                    <div className={`text-center p-3 rounded-lg border ${stats.totalRejectQty > 0 ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                                        <div className={`text-xs font-medium uppercase tracking-wide ${stats.totalRejectQty > 0 ? 'text-red-500' : 'text-slate-500'}`}>Reject Qty</div>
+                                        <div className={`text-2xl font-bold mt-1 ${stats.totalRejectQty > 0 ? 'text-red-700' : 'text-slate-700'}`}>{stats.totalRejectQty}</div>
+                                    </div>
                                 </div>
-                                <div className="overflow-x-auto">
-                                    <table className="min-w-full text-xs">
-                                        <thead>
-                                            <tr className="bg-slate-100 text-slate-600">
-                                                <th className="px-3 py-2 text-left font-semibold">WO ID</th>
-                                                <th className="px-3 py-2 text-left font-semibold">Part No</th>
-                                                <th className="px-3 py-2 text-left font-semibold">Operator</th>
-                                                <th className="px-3 py-2 text-left font-semibold">Setting</th>
-                                                <th className="px-3 py-2 text-center font-semibold">Jobs</th>
-                                                <th className="px-3 py-2 text-center font-semibold">Cycles</th>
-                                                <th className="px-3 py-2 text-right font-semibold">Cutting</th>
-                                                <th className="px-3 py-2 text-right font-semibold">Pause</th>
-                                                <th className="px-3 py-2 text-right font-semibold">Loading</th>
-                                                <th className="px-3 py-2 text-center font-semibold">PCL</th>
-                                                <th className="px-3 py-2 text-right font-semibold">Avg Cycle</th>
-                                                <th className="px-3 py-2 text-center font-semibold">Allot</th>
-                                                <th className="px-3 py-2 text-center font-semibold">OK</th>
-                                                <th className="px-3 py-2 text-center font-semibold">Reject</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {stats.woBreakdowns.map((wo, i) => (
-                                                <tr key={wo.woId} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                                                    <td className="px-3 py-2 font-semibold text-indigo-700">{wo.woId}</td>
-                                                    <td className="px-3 py-2 text-slate-700">{wo.partNo || '—'}</td>
-                                                    <td className="px-3 py-2 text-slate-700">{wo.operator}</td>
-                                                    <td className="px-3 py-2 text-slate-500">{wo.setting || '—'}</td>
-                                                    <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.jobs}</td>
-                                                    <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.cycles}</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(wo.cuttingSec)}</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-amber-700">{formatDuration(wo.pauseSec)}</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(wo.loadingSec)}</td>
-                                                    <td className="px-3 py-2 text-center text-slate-600">{wo.pcl ? formatDuration(wo.pcl) : '—'}</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(wo.avgCycleSec)}</td>
-                                                    <td className="px-3 py-2 text-center text-blue-700 font-medium">{wo.allotedQty}</td>
-                                                    <td className="px-3 py-2 text-center text-emerald-700 font-medium">{wo.okQty}</td>
-                                                    <td className={`px-3 py-2 text-center font-medium ${wo.rejectQty > 0 ? 'text-red-600 font-bold' : 'text-slate-400'}`}>{wo.rejectQty}</td>
+                            </div>
+
+                            {/* Panel C: WO Breakdown Table */}
+                            {stats.woBreakdowns.length > 0 && (
+                                <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+                                    <div className="px-4 py-3 border-b bg-slate-50">
+                                        <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                                            <FileText className="h-4 w-4 text-indigo-500" />
+                                            Work Order Breakdown
+                                        </h3>
+                                    </div>
+                                    <div className="overflow-x-auto">
+                                        <table className="min-w-full text-xs">
+                                            <thead>
+                                                <tr className="bg-slate-100 text-slate-600">
+                                                    <th className="px-3 py-2 text-left font-semibold">WO ID</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Part No</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Operator</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Setting</th>
+                                                    <th className="px-3 py-2 text-center font-semibold">Jobs</th>
+                                                    <th className="px-3 py-2 text-center font-semibold">Cycles</th>
+                                                    <th className="px-3 py-2 text-right font-semibold">Cutting</th>
+                                                    <th className="px-3 py-2 text-right font-semibold">Pause</th>
+                                                    <th className="px-3 py-2 text-right font-semibold">Loading</th>
+                                                    <th className="px-3 py-2 text-center font-semibold">PCL</th>
+                                                    <th className="px-3 py-2 text-right font-semibold">Avg Cycle</th>
+                                                    <th className="px-3 py-2 text-center font-semibold">Allot</th>
+                                                    <th className="px-3 py-2 text-center font-semibold">OK</th>
+                                                    <th className="px-3 py-2 text-center font-semibold">Reject</th>
                                                 </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
+                                            </thead>
+                                            <tbody>
+                                                {stats.woBreakdowns.map((wo, i) => (
+                                                    <tr key={wo.woId} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                                                        <td className="px-3 py-2 font-semibold text-indigo-700">{wo.woId}</td>
+                                                        <td className="px-3 py-2 text-slate-700">{wo.partNo || '—'}</td>
+                                                        <td className="px-3 py-2 text-slate-700">{wo.operator}</td>
+                                                        <td className="px-3 py-2 text-slate-500">{wo.setting || '—'}</td>
+                                                        <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.jobs}</td>
+                                                        <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.cycles}</td>
+                                                        <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(wo.cuttingSec)}</td>
+                                                        <td className="px-3 py-2 text-right font-mono text-amber-700">{formatDuration(wo.pauseSec)}</td>
+                                                        <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(wo.loadingSec)}</td>
+                                                        <td className="px-3 py-2 text-center text-slate-600">{wo.pcl ? formatDuration(wo.pcl) : '—'}</td>
+                                                        <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(wo.avgCycleSec)}</td>
+                                                        <td className="px-3 py-2 text-center text-blue-700 font-medium">{wo.allotedQty}</td>
+                                                        <td className="px-3 py-2 text-center text-emerald-700 font-medium">{wo.okQty}</td>
+                                                        <td className={`px-3 py-2 text-center font-medium ${wo.rejectQty > 0 ? 'text-red-600 font-bold' : 'text-slate-400'}`}>{wo.rejectQty}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 </div>
-                            </div>
-                        )}
+                            )}
 
-                        {/* Panel D: Operator Summary */}
-                        {stats.operatorSummaries.length > 0 && (
-                            <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-                                <div className="px-4 py-3 border-b bg-slate-50">
-                                    <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                                        <Users className="h-4 w-4 text-violet-500" />
-                                        Operator Summary
-                                    </h3>
-                                </div>
-                                <div className="overflow-x-auto">
-                                    <table className="min-w-full text-xs">
-                                        <thead>
-                                            <tr className="bg-slate-100 text-slate-600">
-                                                <th className="px-3 py-2 text-left font-semibold">Operator</th>
-                                                <th className="px-3 py-2 text-center font-semibold">WOs Handled</th>
-                                                <th className="px-3 py-2 text-center font-semibold">Jobs</th>
-                                                <th className="px-3 py-2 text-center font-semibold">Cycles</th>
-                                                <th className="px-3 py-2 text-right font-semibold">Cutting Time</th>
-                                                <th className="px-3 py-2 text-right font-semibold">Pause Time</th>
-                                                <th className="px-3 py-2 text-right font-semibold">Avg Cycle</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {stats.operatorSummaries.map((op, i) => (
-                                                <tr key={op.name} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                                                    <td className="px-3 py-2 font-semibold text-violet-700">{op.name}</td>
-                                                    <td className="px-3 py-2 text-center font-medium text-slate-800">{op.woCount}</td>
-                                                    <td className="px-3 py-2 text-center font-medium text-slate-800">{op.totalJobs}</td>
-                                                    <td className="px-3 py-2 text-center font-medium text-slate-800">{op.totalCycles}</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(op.totalCuttingSec)}</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-amber-700">{formatDuration(op.totalPauseSec)}</td>
-                                                    <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(op.avgCycleSec)}</td>
+                            {/* Panel D: Operator Summary */}
+                            {stats.operatorSummaries.length > 0 && (
+                                <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+                                    <div className="px-4 py-3 border-b bg-slate-50">
+                                        <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                                            <Users className="h-4 w-4 text-violet-500" />
+                                            Operator Summary
+                                        </h3>
+                                    </div>
+                                    <div className="overflow-x-auto">
+                                        <table className="min-w-full text-xs">
+                                            <thead>
+                                                <tr className="bg-slate-100 text-slate-600">
+                                                    <th className="px-3 py-2 text-left font-semibold">Operator</th>
+                                                    <th className="px-3 py-2 text-center font-semibold">WOs Handled</th>
+                                                    <th className="px-3 py-2 text-center font-semibold">Jobs</th>
+                                                    <th className="px-3 py-2 text-center font-semibold">Cycles</th>
+                                                    <th className="px-3 py-2 text-right font-semibold">Cutting Time</th>
+                                                    <th className="px-3 py-2 text-right font-semibold">Pause Time</th>
+                                                    <th className="px-3 py-2 text-right font-semibold">Avg Cycle</th>
                                                 </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
+                                            </thead>
+                                            <tbody>
+                                                {stats.operatorSummaries.map((op, i) => (
+                                                    <tr key={op.name} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                                                        <td className="px-3 py-2 font-semibold text-violet-700">{op.name}</td>
+                                                        <td className="px-3 py-2 text-center font-medium text-slate-800">{op.woCount}</td>
+                                                        <td className="px-3 py-2 text-center font-medium text-slate-800">{op.totalJobs}</td>
+                                                        <td className="px-3 py-2 text-center font-medium text-slate-800">{op.totalCycles}</td>
+                                                        <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(op.totalCuttingSec)}</td>
+                                                        <td className="px-3 py-2 text-right font-mono text-amber-700">{formatDuration(op.totalPauseSec)}</td>
+                                                        <td className="px-3 py-2 text-right font-mono text-slate-600">{formatDuration(op.avgCycleSec)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 </div>
-                            </div>
-                        )}
+                            )}
                         </div>
                     )
                 }
 
                 {/* Report Table */}
-                <ReportTable rows={rows} loading={loading} />
+                <div className="flex items-center justify-end mb-2 text-xs text-slate-500">
+                    {searchQuery && (
+                        <span>Showing {filteredRows.length} of {rows.length} rows</span>
+                    )}
+                </div>
+                <ReportTable rows={filteredRows} loading={loading} isFiltered={!!searchQuery} />
             </div>
         </div >
     );
