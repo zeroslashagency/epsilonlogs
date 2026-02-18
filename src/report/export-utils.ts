@@ -57,6 +57,7 @@ export const LOG_STYLE_COLORS = {
     groupedOrange: 'FFF4B183',
     groupedOutline: 'FF22C55E',
     groupedSummaryBg: 'FF1E3A8A',
+    groupedPurple: 'FFE6D0FF', // Light Purple
 } as const;
 
 export interface LogsSheetRow {
@@ -148,7 +149,7 @@ type WorkbookCtor = new () => Workbook;
 let excelJsModulePromise: Promise<ExcelJSImport> | null = null;
 let excelJsMinModulePromise: Promise<unknown> | null = null;
 
-type GroupedRowStyle = 'default' | 'yellowAction' | 'spindlePair' | 'keyPair' | 'pausePair' | 'keyActionBlue' | 'summary';
+type GroupedRowStyle = 'default' | 'yellowAction' | 'spindlePair' | 'keyPair' | 'pausePair' | 'keyActionBlue' | 'summary' | 'jobBlock';
 
 interface GroupedExportRow {
     row: GroupedLogsSheetRow;
@@ -1111,7 +1112,7 @@ function buildGroupedBaseRow(
     };
 }
 
-function buildGroupedExportRows(
+export function buildGroupedExportRows(
     rows: ReportRow[],
     woDetailsMap: Map<number, WoDetails>,
 ): GroupedExportRow[] {
@@ -1128,7 +1129,7 @@ function buildGroupedExportRows(
         if (row.isComputed && !row.isWoSummary) {
             continue;
         }
-        if (!row.isWoSummary && !row.action) {
+        if (!row.isWoSummary && !row.action && !row.isJobBlock) {
             continue;
         }
 
@@ -1164,6 +1165,57 @@ function buildGroupedExportRows(
                 includeInSerial: true,
             });
             pendingWoStop = null;
+        }
+
+        if (row.isComputed && !row.isWoSummary) {
+            continue;
+        }
+
+        // Handle Special Job Blocks (Setting, etc.) which have empty action
+        if (row.isJobBlock && !row.action) {
+            const serial = typeof row.logId === 'number' ? serialNo++ : '';
+            const woDetails = resolveWoDetails(row, woDetailsMap);
+            // Construct "2: Setting" if possible, else just "Setting"
+            const jobTypeId = woDetails?.job_type ? `${woDetails.job_type}: ` : '';
+            const jobTypeLabel = row.jobType || '';
+
+            const jobName = (row.label || 'PROCESS').toUpperCase().replace(' PROCESS', '');
+            const jobColumnText = `${jobTypeId}${jobTypeLabel}`;
+
+            // Row 1: START
+            const startBase = buildGroupedBaseRow(row, serial, woDetailsMap);
+            startBase.Action = `${jobName} START`;
+            startBase.TIME = '';
+            startBase.PLC = '';
+            startBase.JOB = jobColumnText;
+            startBase.Notes = row.originalLog?.start_comment || woDetails?.start_comment || '';
+
+            const pairId = `job-block-${row.rowId}`;
+
+            exportRows.push({
+                row: startBase,
+                style: 'jobBlock',
+                jobGroupKey: row.jobBlockLabel || null,
+                pairId
+            });
+
+            // Row 2: END
+            const endTs = row.timestamp + (row.durationSec || 0) * 1000;
+            const endBase = buildGroupedBaseRow(row, '', woDetailsMap);
+            endBase['Log Time'] = formatGroupedLogDateTime(new Date(endTs));
+            endBase.Action = `${jobName} END`;
+            endBase.TIME = row.durationText || '';
+            endBase.PLC = '';
+            endBase.JOB = jobColumnText;
+            endBase.Notes = woDetails?.stop_comment || '';
+
+            exportRows.push({
+                row: endBase,
+                style: 'jobBlock',
+                jobGroupKey: row.jobBlockLabel || null,
+                pairId
+            });
+            continue;
         }
 
         if (row.isWoSummary && row.woSummaryData) {
@@ -1640,6 +1692,17 @@ function applyGroupedDataRowStyle(row: Row, exportRow: GroupedExportRow): void {
                 type: 'pattern',
                 pattern: 'solid',
                 fgColor: { argb: LOG_STYLE_COLORS.groupedLightBlue },
+            };
+        }
+    }
+
+    if (exportRow.style === 'jobBlock') {
+        for (const col of [4, 5, 6, 7, 8]) {
+            const cell = row.getCell(col);
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: LOG_STYLE_COLORS.groupedPurple },
             };
         }
     }
