@@ -1,4 +1,17 @@
-import { DeviceLogEntry, WoSegment } from "./report-types";
+import { DeviceLogEntry, JobType, WoSegment } from "./report-types";
+
+/**
+ * Helper to map raw job type ID to string label.
+ */
+function mapJobType(typeId: number): WoSegment["jobType"] {
+    switch (typeId) {
+        case JobType.PRODUCTION: return "Production";
+        case JobType.SETTING: return "Setting";
+        case JobType.CALIBRATION: return "Calibration";
+        case JobType.MAINTENANCE: return "Maintenance";
+        default: return "Other";
+    }
+}
 
 /**
  * FIX 6: Scope jobs strictly inside WO_START..WO_STOP.
@@ -15,12 +28,16 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
                 segments.push(activeSegment);
                 activeSegment = null;
             }
+            // Parse job_type from log (API returns string or number)
+            const rawType = log.job_type ? parseInt(String(log.job_type), 10) : JobType.PRODUCTION;
+
             activeSegment = {
                 woId: log.wo_id,
                 logs: [log],
                 spindleCycles: [],
                 pausePeriods: [],
-                jobType: "Production",
+                jobType: mapJobType(rawType),
+                rawJobType: rawType,
             };
         } else if (log.action === "WO_STOP") {
             if (activeSegment && activeSegment.woId === log.wo_id) {
@@ -56,6 +73,9 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
             const hasSpindle = woLogs.some(l =>
                 l.action === "SPINDLE_ON" || l.action === "SPINDLE_OFF"
             );
+            // Fallback assumes Production if spindle activity exists
+            const fallbackType = woId && hasSpindle ? JobType.PRODUCTION : JobType.PRODUCTION;
+
             segments.push({
                 woId,
                 logs: woLogs.sort((a, b) =>
@@ -63,7 +83,8 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
                 ),
                 spindleCycles: [],
                 pausePeriods: [],
-                jobType: woId && hasSpindle ? "Production" : "Unknown",
+                jobType: mapJobType(fallbackType),
+                rawJobType: fallbackType,
             });
         }
     }

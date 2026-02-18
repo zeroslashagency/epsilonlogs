@@ -322,7 +322,7 @@ export default function ReportPage() {
                                                     <th className="px-3 py-2 text-left font-semibold">WO ID</th>
                                                     <th className="px-3 py-2 text-left font-semibold">Part No</th>
                                                     <th className="px-3 py-2 text-left font-semibold">Operator</th>
-                                                    <th className="px-3 py-2 text-left font-semibold">Setting</th>
+                                                    <th className="px-3 py-2 text-left font-semibold">Job Type</th>
                                                     <th className="px-3 py-2 text-center font-semibold">Jobs</th>
                                                     <th className="px-3 py-2 text-center font-semibold">Cycles</th>
                                                     <th className="px-3 py-2 text-right font-semibold">Cutting</th>
@@ -341,7 +341,7 @@ export default function ReportPage() {
                                                         <td className="px-3 py-2 font-semibold text-indigo-700">{wo.woId}</td>
                                                         <td className="px-3 py-2 text-slate-700">{wo.partNo || '—'}</td>
                                                         <td className="px-3 py-2 text-slate-700">{wo.operator}</td>
-                                                        <td className="px-3 py-2 text-slate-500">{wo.setting || '—'}</td>
+                                                        <td className="px-3 py-2 text-slate-500">{wo.jobType || '—'}</td>
                                                         <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.jobs}</td>
                                                         <td className="px-3 py-2 text-center font-medium text-slate-800">{wo.cycles}</td>
                                                         <td className="px-3 py-2 text-right font-mono text-blue-700">{formatDuration(wo.cuttingSec)}</td>

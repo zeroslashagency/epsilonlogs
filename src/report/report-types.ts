@@ -77,6 +77,16 @@ export interface WoDetails {
 
 // --- Internal Processing Types ---
 
+export enum JobType {
+    PRODUCTION = 1,
+    SETTING = 2,
+    CALIBRATION = 3,
+    MAINTENANCE = 4,
+    MAN = 5,
+    TRAINING = 6,
+    RD = 7,
+}
+
 export interface SpindleCycle {
     onLog: DeviceLogEntry;
     offLog: DeviceLogEntry;
@@ -94,7 +104,8 @@ export interface WoSegment {
     logs: DeviceLogEntry[];
     spindleCycles: SpindleCycle[];
     pausePeriods: PausePeriod[];
-    jobType: "Production" | "Unknown";
+    jobType: "Production" | "Unknown" | "Setting" | "Calibration" | "Maintenance" | "Other";
+    rawJobType?: number;
 }
 
 export interface JobBlock {
@@ -159,7 +170,7 @@ export interface ReportRow {
     durationSec?: number | undefined;
     label?: string | undefined;
     summary?: string | undefined;
-    jobType: "Production" | "Unknown" | "Manual Input";
+    jobType: "Production" | "Unknown" | "Manual Input" | "Setting" | "Calibration" | "Maintenance" | "Other";
     operatorName?: string;
     classification?: "GOOD" | "WARNING" | "BAD" | "UNKNOWN";
     reasonCode?: string;
@@ -215,6 +226,7 @@ export interface WoBreakdown {
     partNo: string;
     operator: string;
     setting: string;
+    jobType?: string;
     jobs: number;
     cycles: number;
     cuttingSec: number;

@@ -1,4 +1,4 @@
-import { DeviceLogEntry, JobBlock, PausePeriod, ReportRow, SpindleCycle, WoDetails, WoSegment } from "./report-types.js";
+import { DeviceLogEntry, JobBlock, JobType, PausePeriod, ReportRow, SpindleCycle, WoDetails, WoSegment } from "./report-types.js";
 import { formatDuration, formatVariance } from "./format-utils.js";
 import { getKeyActionSummary, isKeyAction } from "./key-actions.js";
 
@@ -109,99 +109,124 @@ export function injectComputedRows(
     }
 
     // 4. Job Blocks + cycles + gaps
-    for (let bIdx = 0; bIdx < jobBlocks.length; bIdx++) {
-        const block = jobBlocks[bIdx]!;
-
-        for (let cIdx = 0; cIdx < block.cycles.length; cIdx++) {
-            const cycle = block.cycles[cIdx]!;
-            const isFinal = cIdx === block.cycles.length - 1;
-
-            // SPINDLE_ON — variance on final cycle
+    // FIX: For non-Production jobs (Setting, etc.), show a single block instead of cycles.
+    if (segment.rawJobType && segment.rawJobType !== JobType.PRODUCTION) {
+        // Special Job Types: Single continuous row
+        const block = jobBlocks[0];
+        if (block && woStartLog) {
             rows.push({
-                rowId: `log-${cycle.onLog.log_id}`,
-                logId: cycle.onLog.log_id,
-                logTime: new Date(cycle.onLog.log_time),
-                action: "SPINDLE_ON",
+                rowId: `job-block-${segment.woId}`,
+                logId: woStartLog.log_id,
+                logTime: new Date(woStartLog.log_time), // Start at WO Start
+                action: "", // No specific action like SPINDLE_ON
                 label: block.label,
+                durationText: formatDuration(block.totalSec),
+                durationSec: block.totalSec,
                 jobType: segment.jobType,
                 isJobBlock: true,
-                jobBlockLabel: block.label,
-                originalLog: cycle.onLog,
-                timestamp: new Date(cycle.onLog.log_time).getTime(),
-                summary: isFinal && block.pcl ? formatVariance(block.varianceSec).text : undefined,
-                varianceColor: isFinal && block.pcl ? formatVariance(block.varianceSec).color : undefined,
+                jobBlockLabel: block.label, // boxes the whole thing
+                originalLog: woStartLog,
+                timestamp: new Date(woStartLog.log_time).getTime() + 100, // slightly after start
                 operatorName: operator,
                 woSpecs,
             });
+        }
+    } else {
+        // PRODUCTION: Standard behavior (cycles)
+        for (let bIdx = 0; bIdx < jobBlocks.length; bIdx++) {
+            const block = jobBlocks[bIdx]!;
 
-            // SPINDLE_OFF — total on final cycle
-            rows.push({
-                rowId: `log-${cycle.offLog.log_id}`,
-                logId: cycle.offLog.log_id,
-                logTime: new Date(cycle.offLog.log_time),
-                action: "SPINDLE_OFF",
-                label: block.label,
-                durationText: formatDuration(cycle.durationSec),
-                durationSec: cycle.durationSec,
-                jobType: segment.jobType,
-                isJobBlock: true,
-                jobBlockLabel: block.label,
-                originalLog: cycle.offLog,
-                timestamp: new Date(cycle.offLog.log_time).getTime(),
-                summary: isFinal && block.pcl ? formatDuration(block.totalSec) : undefined,
-                operatorName: operator,
-                woSpecs,
-            });
+            for (let cIdx = 0; cIdx < block.cycles.length; cIdx++) {
+                const cycle = block.cycles[cIdx]!;
+                const isFinal = cIdx === block.cycles.length - 1;
 
-            // Loading/Unloading gap
-            const nextCycle = !isFinal
-                ? block.cycles[cIdx + 1]
-                : bIdx < jobBlocks.length - 1 ? jobBlocks[bIdx + 1]!.cycles[0] : null;
-
-            if (nextCycle) {
-                const offTs = new Date(cycle.offLog.log_time).getTime();
-                const nextOnTs = new Date(nextCycle.onLog.log_time).getTime();
-                const gapSec = (nextOnTs - offTs) / 1000;
-
-                const intervening = segment.logs.filter((l: DeviceLogEntry) => {
-                    const ts = new Date(l.log_time).getTime();
-                    return ts > offTs && ts < nextOnTs &&
-                        ["WO_PAUSE", "WO_RESUME", "WO_STOP", "WO_START"].includes(l.action);
+                // SPINDLE_ON — variance on final cycle
+                rows.push({
+                    rowId: `log-${cycle.onLog.log_id}`,
+                    logId: cycle.onLog.log_id,
+                    logTime: new Date(cycle.onLog.log_time),
+                    action: "SPINDLE_ON",
+                    label: block.label,
+                    jobType: segment.jobType,
+                    isJobBlock: true,
+                    jobBlockLabel: block.label,
+                    originalLog: cycle.onLog,
+                    timestamp: new Date(cycle.onLog.log_time).getTime(),
+                    summary: isFinal && block.pcl ? formatVariance(block.varianceSec).text : undefined,
+                    varianceColor: isFinal && block.pcl ? formatVariance(block.varianceSec).color : undefined,
+                    operatorName: operator,
+                    woSpecs,
                 });
 
-                const hasPause = intervening.some((l: DeviceLogEntry) => l.action === "WO_PAUSE");
-                const hasStop = intervening.some((l: DeviceLogEntry) => l.action === "WO_STOP");
+                // SPINDLE_OFF — total on final cycle
+                rows.push({
+                    rowId: `log-${cycle.offLog.log_id}`,
+                    logId: cycle.offLog.log_id,
+                    logTime: new Date(cycle.offLog.log_time),
+                    action: "SPINDLE_OFF",
+                    label: block.label,
+                    durationText: formatDuration(cycle.durationSec),
+                    durationSec: cycle.durationSec,
+                    jobType: segment.jobType,
+                    isJobBlock: true,
+                    jobBlockLabel: block.label,
+                    originalLog: cycle.offLog,
+                    timestamp: new Date(cycle.offLog.log_time).getTime(),
+                    summary: isFinal && block.pcl ? formatDuration(block.totalSec) : undefined,
+                    operatorName: operator,
+                    woSpecs,
+                });
 
-                // Determine effective block label for gap rows:
-                // If next cycle is in SAME block, include gap in that block.
-                // If next cycle is in NEW block, gap is outside?
-                // The issue was visual discontinuity. If we give it the CURRENT block's label, it extends the green line.
-                // But only if next cycle is ALSO the same label?
-                // Actually, if we give it the label, it will be wrapped. That's what we want if it's "part of the job".
-                const gapLabel = (!isFinal) ? block.label : undefined;
+                // Loading/Unloading gap
+                const nextCycle = !isFinal
+                    ? block.cycles[cIdx + 1]
+                    : bIdx < jobBlocks.length - 1 ? jobBlocks[bIdx + 1]!.cycles[0] : null;
 
-                if (hasStop) {
-                    // skip
-                } else if (hasPause) {
-                    const pauseEvt = intervening.find((l: DeviceLogEntry) => l.action === "WO_PAUSE");
-                    const resumeEvt = intervening.find((l: DeviceLogEntry) => l.action === "WO_RESUME");
-                    if (pauseEvt) {
-                        const preSec = (new Date(pauseEvt.log_time).getTime() - offTs) / 1000;
-                        if (preSec > 0 && preSec <= MAX_LOADING_GAP_SEC) {
-                            rows.push(makeGapRow(`pre-${cycle.offLog.log_id}`, offTs + 500, preSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel));
+                if (nextCycle) {
+                    const offTs = new Date(cycle.offLog.log_time).getTime();
+                    const nextOnTs = new Date(nextCycle.onLog.log_time).getTime();
+                    const gapSec = (nextOnTs - offTs) / 1000;
+
+                    const intervening = segment.logs.filter((l: DeviceLogEntry) => {
+                        const ts = new Date(l.log_time).getTime();
+                        return ts > offTs && ts < nextOnTs &&
+                            ["WO_PAUSE", "WO_RESUME", "WO_STOP", "WO_START"].includes(l.action);
+                    });
+
+                    const hasPause = intervening.some((l: DeviceLogEntry) => l.action === "WO_PAUSE");
+                    const hasStop = intervening.some((l: DeviceLogEntry) => l.action === "WO_STOP");
+
+                    // Determine effective block label for gap rows:
+                    // If next cycle is in SAME block, include gap in that block.
+                    // If next cycle is in NEW block, gap is outside?
+                    // The issue was visual discontinuity. If we give it the CURRENT block's label, it extends the green line.
+                    // But only if next cycle is ALSO the same label?
+                    // Actually, if we give it the label, it will be wrapped. That's what we want if it's "part of the job".
+                    const gapLabel = (!isFinal) ? block.label : undefined;
+
+                    if (hasStop) {
+                        // skip
+                    } else if (hasPause) {
+                        const pauseEvt = intervening.find((l: DeviceLogEntry) => l.action === "WO_PAUSE");
+                        const resumeEvt = intervening.find((l: DeviceLogEntry) => l.action === "WO_RESUME");
+                        if (pauseEvt) {
+                            const preSec = (new Date(pauseEvt.log_time).getTime() - offTs) / 1000;
+                            if (preSec > 0 && preSec <= MAX_LOADING_GAP_SEC) {
+                                rows.push(makeGapRow(`pre-${cycle.offLog.log_id}`, offTs + 500, preSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel));
+                            }
                         }
-                    }
-                    if (resumeEvt) {
-                        const postSec = (nextOnTs - new Date(resumeEvt.log_time).getTime()) / 1000;
-                        if (postSec > 0 && postSec <= MAX_LOADING_GAP_SEC) {
-                            rows.push(makeGapRow(`post-${resumeEvt.log_id}`, new Date(resumeEvt.log_time).getTime() + 500, postSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel)); // Should this extend block? Only if next is same.
+                        if (resumeEvt) {
+                            const postSec = (nextOnTs - new Date(resumeEvt.log_time).getTime()) / 1000;
+                            if (postSec > 0 && postSec <= MAX_LOADING_GAP_SEC) {
+                                rows.push(makeGapRow(`post-${resumeEvt.log_id}`, new Date(resumeEvt.log_time).getTime() + 500, postSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel)); // Should this extend block? Only if next is same.
+                            }
                         }
+                    } else if (gapSec > 0 && gapSec <= MAX_LOADING_GAP_SEC) {
+                        // This is the standard intra-job loading time. Give it the block label.
+                        rows.push(makeGapRow(`load-${cycle.offLog.log_id}`, offTs + 500, gapSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel));
+                    } else if (gapSec > MAX_LOADING_GAP_SEC) {
+                        rows.push(makeGapRow(`idle-${cycle.offLog.log_id}`, offTs + 500, gapSec, "Idle/Break Time", segment.jobType, operator, woSpecs, undefined)); // Break breaks the block
                     }
-                } else if (gapSec > 0 && gapSec <= MAX_LOADING_GAP_SEC) {
-                    // This is the standard intra-job loading time. Give it the block label.
-                    rows.push(makeGapRow(`load-${cycle.offLog.log_id}`, offTs + 500, gapSec, "Loading /Unloading Time", segment.jobType, operator, woSpecs, gapLabel));
-                } else if (gapSec > MAX_LOADING_GAP_SEC) {
-                    rows.push(makeGapRow(`idle-${cycle.offLog.log_id}`, offTs + 500, gapSec, "Idle/Break Time", segment.jobType, operator, woSpecs, undefined)); // Break breaks the block
                 }
             }
         }
@@ -370,7 +395,7 @@ function findPauseReason(pauseLog: { log_time: string }, woDetails?: WoDetails):
     return best?.comment || null;
 }
 
-function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jobType: "Production" | "Unknown", operator: string, woSpecs?: { woId: string; pclText: string; allotted: number }, jobBlockLabel?: string): ReportRow {
+function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jobType: ReportRow["jobType"], operator: string, woSpecs?: { woId: string; pclText: string; allotted: number }, jobBlockLabel?: string): ReportRow {
     return {
         rowId: `computed-${idSuffix}`,
         logTime: new Date(ts),

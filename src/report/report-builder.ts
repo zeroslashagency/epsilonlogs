@@ -1,4 +1,4 @@
-import { DeviceLogEntry, OperatorSummary, ReportConfig, ReportRow, ReportStats, WoBreakdown, WoDetails } from "./report-types";
+import { DeviceLogEntry, JobBlock, JobType, OperatorSummary, ReportConfig, ReportRow, ReportStats, WoBreakdown, WoDetails } from "./report-types";
 import { normalizeLogs } from "./log-normalizer";
 import { segmentLogs } from "./wo-segmenter";
 import { pairSpindleCycles } from "./spindle-pairer";
@@ -47,8 +47,9 @@ export function buildReport(
 
     // 3. Process each segment
     for (const segment of segments) {
-        if (segment.jobType === "Production") {
-            // A. Pair Cycles & Pauses
+        // FIX: Allow all job types to be processed, but distinguish logic inside
+        if (segment.jobType !== "Unknown") {
+            // A. Pair Cycles & Pauses (Always useful for raw metrics)
             pairSpindleCycles(segment);
 
             const segCuttingSec = segment.spindleCycles.reduce((sum, c) => sum + c.durationSec, 0);
@@ -88,10 +89,32 @@ export function buildReport(
 
             // C. Group into Jobs
             const splitDisableWindows = buildKeySplitDisableWindows(segment.logs);
-            const blocks = groupCyclesIntoJobs(segment.spindleCycles, details, {
-                toleranceSec: config.toleranceSec,
-                splitDisableWindows,
-            });
+            let blocks: JobBlock[] = [];
+
+            if (segment.rawJobType && segment.rawJobType !== JobType.PRODUCTION) {
+                // SPECIAL Job Types: Single Block
+                // If API provides duration, use it. Else calculate from first/last log.
+                let duration = details.duration || 0;
+                if (duration === 0 && segment.logs.length > 0) {
+                    const start = new Date(segment.logs[0]!.log_time).getTime();
+                    const end = new Date(segment.logs[segment.logs.length - 1]!.log_time).getTime();
+                    duration = (end - start) / 1000;
+                }
+
+                blocks.push({
+                    label: (segment.jobType || "PROCESS").toUpperCase() + " PROCESS",
+                    cycles: [], // No cycles needed for special types
+                    totalSec: duration,
+                    varianceSec: 0,
+                    pcl: null
+                });
+            } else {
+                // PRODUCTION: Standard cycle grouping
+                blocks = groupCyclesIntoJobs(segment.spindleCycles, details, {
+                    toleranceSec: config.toleranceSec,
+                    splitDisableWindows,
+                });
+            }
             totalJobs += blocks.length;
 
             // D. Inject Computed Rows (pass woDetails for headers/summaries)
@@ -124,6 +147,7 @@ export function buildReport(
                 partNo: details.part_no,
                 operator: operatorName,
                 setting: details.setting,
+                jobType: segment.jobType,
                 jobs: blocks.length,
                 cycles: segment.spindleCycles.length,
                 cuttingSec: segCuttingSec,
