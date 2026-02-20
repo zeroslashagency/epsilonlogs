@@ -1,102 +1,126 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-    Activity,
     BarChart3,
     Bell,
-    Calendar,
-    Clock3,
-    Cpu,
     Download,
     Factory,
     Gauge,
-    LayoutDashboard,
     RefreshCcw,
     Search,
     Settings,
     ShieldAlert,
-    Smartphone,
     User,
-    Users,
     Wrench,
-    Zap,
+    X,
     type LucideIcon,
 } from "lucide-react";
-import { fetchAllWoDetails, fetchDeviceLogs, fetchDeviceNameMap, formatDateForApi } from "../report/api-client";
-import { extractWoIds } from "../report/log-normalizer";
-import {
-    applyReportV2Filters,
-    buildReportV2,
-    DEFAULT_REPORT_V2_FILTER_STATE,
-    ReportV2FilterState,
-} from "../report/report-builder-v2";
-import { DeviceLogEntry, ReportConfig, ReportRow, ReportStats } from "../report/report-types";
+import { fetchDeviceLogs, fetchWoDetails, formatDateForApi } from "../report/api-client";
+import { buildReportV2 } from "../report/report-builder-v2";
+import { DeviceLogEntry, ReportConfig, ReportRow, WoDetails } from "../report/report-types";
 import { formatDuration } from "../report/format-utils";
-import { usePersistedFilters } from "../report-v2/usePersistedFilters";
+import { Expandable, ExpandableContent, ExpandableTrigger } from "@/components/ui/expandable";
 
 const TOKEN = import.meta.env.VITE_API_TOKEN;
 const REFRESH_INTERVAL_MS = 30000;
+const OVERVIEW_CACHE_TTL_MS = 45000;
+const WO_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
+const LIVE_WINDOW_MS = 15 * 60 * 1000;
 const MACHINE_IDS = [15, 16, 17, 18] as const;
+const TOP_WO_LIMIT = 12;
 
-type RangePreset = "TODAY" | "LAST_6H" | "LAST_24H";
+type RangePreset = "DAY" | "LAST_3_DAYS" | "LAST_7_DAYS" | "LAST_30_DAYS";
 type ShiftPreset = "ALL" | "A" | "B" | "C";
 type MachineScope = "ALL" | number;
+type DetailStage = 1 | 2 | 3;
+type WoExecutionStatus = "LIVE" | "PROCESSING" | "COMPLETE";
+type RowClassification = "GOOD" | "WARNING" | "BAD" | "UNKNOWN";
+type WoJobType = ReportRow["jobType"];
 
-type MachineStatus = "Running" | "Stopped" | "Idle";
+interface WoJobTag {
+    jobType: WoJobType;
+}
 
-interface MachineSnapshot {
-    deviceId: number;
-    deviceName: string;
-    status: MachineStatus;
-    activeWo: string;
+interface WoCardSummary {
+    woId: string;
+    machineId: number | null;
+    operatorName: string;
+    jobType: WoJobType;
+    executionStatus: WoExecutionStatus;
+    pclText: string;
+    totalCycles: number;
+    goodCycles: number;
+    warningCycles: number;
+    badCycles: number;
+    unknownCycles: number;
+    totalCycleSec: number;
+    totalDurationSec: number;
+    avgCycleSec: number;
+    latestTimestamp: number;
     latestEvent: string;
-    latestEventTime: string;
+    latestClassification: RowClassification;
+    latestDurationText: string;
+    latestReason: string;
+    jobTypeTags: WoJobTag[];
 }
 
-interface KpiCard {
-    id: string;
-    label: string;
-    value: string;
-    hint?: string;
-    tone: "blue" | "green" | "amber" | "violet" | "slate";
-    icon: LucideIcon;
+interface WoAccumulator {
+    woId: string;
+    machineId: number | null;
+    operatorName: string;
+    jobType: WoJobType;
+    pclText: string;
+    jobTypeFirstSeen: Map<WoJobType, number>;
+    totalCycles: number;
+    goodCycles: number;
+    warningCycles: number;
+    badCycles: number;
+    unknownCycles: number;
+    totalCycleSec: number;
+    totalDurationSec: number;
+    latestTimestamp: number;
+    latestCycleTimestamp: number;
+    latestEvent: string;
+    latestAction: string;
+    latestClassification: RowClassification;
+    latestDurationText: string;
+    latestReason: string;
+    hasWoStart: boolean;
+    hasWoStop: boolean;
 }
 
-const toneClasses: Record<KpiCard["tone"], string> = {
-    blue: "text-sky-300 border-sky-500/25",
-    green: "text-emerald-300 border-emerald-500/25",
-    amber: "text-amber-300 border-amber-500/25",
-    violet: "text-violet-300 border-violet-500/25",
-    slate: "text-slate-300 border-slate-500/25",
+const classificationBadgeClass: Record<RowClassification, string> = {
+    GOOD: "bg-emerald-100 text-emerald-700 ring-emerald-300",
+    WARNING: "bg-amber-100 text-amber-700 ring-amber-300",
+    BAD: "bg-rose-100 text-rose-700 ring-rose-300",
+    UNKNOWN: "bg-slate-100 text-slate-700 ring-slate-300",
 };
 
-const classificationBadgeClass: Record<string, string> = {
-    GOOD: "bg-emerald-500/20 text-emerald-200 ring-emerald-500/40",
-    WARNING: "bg-amber-500/20 text-amber-200 ring-amber-500/40",
-    BAD: "bg-rose-500/20 text-rose-200 ring-rose-500/40",
-    UNKNOWN: "bg-slate-500/20 text-slate-200 ring-slate-500/40",
-};
-
-const statusToneClass: Record<MachineStatus, string> = {
-    Running: "bg-emerald-500/20 text-emerald-200",
-    Stopped: "bg-slate-500/20 text-slate-200",
-    Idle: "bg-amber-500/20 text-amber-200",
+const executionStatusBadgeClass: Record<WoExecutionStatus, string> = {
+    LIVE: "bg-sky-100 text-sky-700 ring-sky-300",
+    PROCESSING: "bg-amber-100 text-amber-700 ring-amber-300",
+    COMPLETE: "bg-emerald-100 text-emerald-700 ring-emerald-300",
 };
 
 function getWindowStart(rangePreset: RangePreset, now: Date): Date {
     const start = new Date(now);
 
-    if (rangePreset === "TODAY") {
-        start.setHours(0, 0, 0, 0);
+    if (rangePreset === "DAY") {
+        start.setHours(start.getHours() - 24);
         return start;
     }
 
-    if (rangePreset === "LAST_6H") {
-        start.setHours(start.getHours() - 6);
+    if (rangePreset === "LAST_3_DAYS") {
+        start.setDate(start.getDate() - 3);
         return start;
     }
 
-    start.setHours(start.getHours() - 24);
+    if (rangePreset === "LAST_7_DAYS") {
+        start.setDate(start.getDate() - 7);
+        return start;
+    }
+
+    start.setDate(start.getDate() - 30);
     return start;
 }
 
@@ -117,96 +141,139 @@ function belongsToShift(dateValue: Date, shiftPreset: ShiftPreset): boolean {
     return hour >= 22 || hour < 6;
 }
 
-function resolveMachineStatus(action: string | null): MachineStatus {
-    if (!action) return "Idle";
-
-    if (action === "SPINDLE_ON" || action === "WO_START" || action === "WO_RESUME") {
-        return "Running";
-    }
-
-    if (action === "SPINDLE_OFF" || action === "WO_STOP") {
-        return "Stopped";
-    }
-
-    return "Idle";
-}
-
 function compactTime(value: Date | null): string {
     if (!value) return "--:--";
     return value.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
 
-function modeLabel(mode: ReportV2FilterState["mode"]): string {
-    if (mode === "GOOD_ONLY") return "Good Only";
-    if (mode === "GOOD_WARNING") return "Good + Warning";
-    return "All";
+function formatDateTime(value: Date | null): string {
+    if (!value) return "-";
+    return value.toLocaleString("en-GB");
 }
 
-function buildMachineSnapshot(
-    deviceId: number,
-    logs: DeviceLogEntry[],
-    deviceNameMap: Map<number, string>,
-): MachineSnapshot {
-    const sorted = [...logs].sort((left, right) => new Date(right.log_time).getTime() - new Date(left.log_time).getTime());
-    const latest = sorted[0];
-    const latestDate = latest ? new Date(latest.log_time) : null;
+function hasText(value: string | null | undefined): boolean {
+    return typeof value === "string" && value.trim().length > 0;
+}
 
+function parseApiDate(value: string | null | undefined): Date | null {
+    if (!value) {
+        return null;
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return null;
+    }
+    return parsed;
+}
+
+function resolveWoId(row: ReportRow): string | null {
+    const raw = row.originalLog?.wo_id ?? row.woSpecs?.woId;
+    return raw === undefined || raw === null ? null : String(raw);
+}
+
+function toPclText(value: unknown): string {
+    if (value === null || value === undefined || value === "") {
+        return "-";
+    }
+
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+        return formatDuration(numeric);
+    }
+
+    return String(value);
+}
+
+function hasMeaningfulPclText(value: string | null | undefined): value is string {
+    if (!value) {
+        return false;
+    }
+    const normalized = value.trim().toLowerCase();
+    return normalized !== "-" && normalized !== "0 min 0 sec" && normalized !== "0 sec";
+}
+
+function resolveRowPclText(row: ReportRow): string {
+    const fromLog = toPclText(row.originalLog?.pcl);
+    if (hasMeaningfulPclText(fromLog)) {
+        return fromLog;
+    }
+
+    if (hasMeaningfulPclText(row.woSpecs?.pclText)) {
+        return row.woSpecs!.pclText;
+    }
+
+    return row.woSpecs?.pclText || "-";
+}
+
+function resolveExecutionStatus(entry: WoAccumulator): WoExecutionStatus {
+    if (entry.hasWoStop || entry.latestAction === "WO_STOP") {
+        return "COMPLETE";
+    }
+
+    if (entry.latestAction === "WO_PAUSE") {
+        return "PROCESSING";
+    }
+
+    if (entry.latestAction === "WO_START" || entry.latestAction === "WO_RESUME" || entry.latestAction === "SPINDLE_ON") {
+        return "LIVE";
+    }
+
+    if (Date.now() - entry.latestTimestamp <= LIVE_WINDOW_MS) {
+        return "LIVE";
+    }
+
+    return entry.hasWoStart ? "PROCESSING" : "LIVE";
+}
+
+function getJobTypeIcon(jobType: WoJobType): LucideIcon {
+    if (jobType === "Production") return Factory;
+    if (jobType === "Setting") return Settings;
+    if (jobType === "Calibration") return Gauge;
+    if (jobType === "Maintenance") return Wrench;
+    if (jobType === "Manual Input") return User;
+    if (jobType === "Other") return BarChart3;
+    return ShieldAlert;
+}
+
+function getJobTypeBadgeClass(jobType: WoJobType): string {
+    if (jobType === "Production") return "bg-blue-100 text-blue-700 ring-blue-300";
+    if (jobType === "Setting") return "bg-violet-100 text-violet-700 ring-violet-300";
+    if (jobType === "Calibration") return "bg-cyan-100 text-cyan-700 ring-cyan-300";
+    if (jobType === "Maintenance") return "bg-amber-100 text-amber-700 ring-amber-300";
+    if (jobType === "Manual Input") return "bg-emerald-100 text-emerald-700 ring-emerald-300";
+    if (jobType === "Other") return "bg-rose-100 text-rose-700 ring-rose-300";
+    return "bg-slate-100 text-slate-700 ring-slate-300";
+}
+
+function buildDefaultAccumulator(woId: string, row: ReportRow): WoAccumulator {
+    const timestamp = row.timestamp;
+    const latestAction = row.action || "";
+    const logJobType = row.jobType;
+    const operatorName = row.operatorName || String(row.originalLog?.start_name || "").trim() || "Unknown";
     return {
-        deviceId,
-        deviceName: deviceNameMap.get(deviceId) || `VMC ${MACHINE_IDS.indexOf(deviceId as (typeof MACHINE_IDS)[number]) + 1}`,
-        status: resolveMachineStatus(latest?.action || null),
-        activeWo: latest?.wo_id ? `WO-${latest.wo_id}` : "Idle",
-        latestEvent: latest?.action || "NO_EVENT",
-        latestEventTime: compactTime(latestDate),
+        woId,
+        machineId: row.originalLog?.device_id ?? null,
+        operatorName,
+        jobType: logJobType,
+        pclText: resolveRowPclText(row),
+        jobTypeFirstSeen: new Map([[logJobType, timestamp]]),
+        totalCycles: 0,
+        goodCycles: 0,
+        warningCycles: 0,
+        badCycles: 0,
+        unknownCycles: 0,
+        totalCycleSec: 0,
+        totalDurationSec: 0,
+        latestTimestamp: timestamp,
+        latestCycleTimestamp: -1,
+        latestEvent: row.action || row.label || row.summary || "EVENT",
+        latestAction,
+        latestClassification: "UNKNOWN",
+        latestDurationText: "-",
+        latestReason: "No reason",
+        hasWoStart: row.action === "WO_START",
+        hasWoStop: row.action === "WO_STOP",
     };
-}
-
-function RailNav() {
-    const icons = [LayoutDashboard, Calendar, BarChart3, Clock3, Users, Bell, Smartphone, Activity, ShieldAlert, Settings];
-
-    return (
-        <aside className="hidden md:flex md:w-16 flex-col items-center border-r border-slate-800 bg-[#030611] py-5">
-            <div className="mb-6 rounded-xl bg-blue-500/20 p-2 text-blue-300 ring-1 ring-blue-500/40">
-                <Factory className="h-5 w-5" />
-            </div>
-            <nav className="flex flex-1 flex-col items-center gap-3">
-                {icons.map((Icon, index) => (
-                    <button
-                        key={index}
-                        className="rounded-lg p-2.5 text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
-                        type="button"
-                        aria-label={`nav-${index}`}
-                    >
-                        <Icon className="h-4 w-4" />
-                    </button>
-                ))}
-            </nav>
-            <button
-                type="button"
-                className="rounded-lg p-2.5 text-rose-300 transition hover:bg-rose-500/20"
-                aria-label="logout"
-            >
-                <Activity className="h-4 w-4" />
-            </button>
-        </aside>
-    );
-}
-
-function KpiCardItem({ card }: { card: KpiCard }) {
-    const Icon = card.icon;
-    return (
-        <article className="rounded-xl border border-slate-700 bg-slate-900/75 p-4">
-            <div className="mb-3 flex items-start justify-between">
-                <div className={`rounded-lg border p-2 ${toneClasses[card.tone]}`}>
-                    <Icon className="h-5 w-5" />
-                </div>
-                <span className="text-xs text-slate-400">Live</span>
-            </div>
-            <p className="text-3xl font-semibold text-slate-100">{card.value}</p>
-            <p className="mt-1 text-sm text-slate-400">{card.label}</p>
-            {card.hint ? <p className="mt-2 text-xs text-slate-500">{card.hint}</p> : null}
-        </article>
-    );
 }
 
 export default function ProductionHubV2() {
@@ -214,122 +281,323 @@ export default function ProductionHubV2() {
     const [error, setError] = useState<string | null>(null);
     const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
-    const [rangePreset, setRangePreset] = useState<RangePreset>("TODAY");
+    const [rangePreset, setRangePreset] = useState<RangePreset>("DAY");
     const [shiftPreset, setShiftPreset] = useState<ShiftPreset>("ALL");
     const [machineScope, setMachineScope] = useState<MachineScope>("ALL");
     const [searchQuery, setSearchQuery] = useState("");
 
     const [allRows, setAllRows] = useState<ReportRow[]>([]);
-    const [reportStats, setReportStats] = useState<ReportStats | null>(null);
-    const [machineSnapshots, setMachineSnapshots] = useState<MachineSnapshot[]>([]);
-
-    const [hubSummary, setHubSummary] = useState({
-        totalLogs: 0,
-        totalJobs: 0,
-        totalCycles: 0,
-        avgCycleSec: 0,
-        goodCycles: 0,
-        warningCycles: 0,
-        badCycles: 0,
-        unknownCycles: 0,
-        goodRatePct: 0,
-    });
-
-    const [filterState, setFilterState] = usePersistedFilters();
+    const [woDetailsById, setWoDetailsById] = useState<Map<number, WoDetails>>(new Map());
+    const [selectedWoId, setSelectedWoId] = useState<string | null>(null);
+    const [detailStage, setDetailStage] = useState<DetailStage>(1);
+    const [isOverlayOpen, setIsOverlayOpen] = useState(false);
+    const overviewCacheRef = useRef<Map<string, { rows: ReportRow[]; fetchedAt: number }>>(new Map());
+    const woDetailsCacheRef = useRef<Map<number, { data: WoDetails | null; fetchedAt: number }>>(new Map());
+    const inflightWoDetailsRef = useRef<Map<number, Promise<WoDetails | null>>>(new Map());
 
     const filteredRows = useMemo(() => {
-        const reportFiltered = applyReportV2Filters(allRows, filterState);
         const query = searchQuery.trim().toLowerCase();
 
         if (!query) {
-            return reportFiltered;
+            return allRows;
         }
 
-        return reportFiltered.filter((row) => {
+        return allRows.filter((row) => {
             const wo = String(row.woSpecs?.woId || row.originalLog?.wo_id || "").toLowerCase();
             const operator = (row.operatorName || "").toLowerCase();
             const action = (row.action || "").toLowerCase();
             const reason = (row.reasonText || "").toLowerCase();
             return wo.includes(query) || operator.includes(query) || action.includes(query) || reason.includes(query);
         });
-    }, [allRows, filterState, searchQuery]);
+    }, [allRows, searchQuery]);
 
-    const latestCycles = useMemo(
-        () => filteredRows.filter((row) => row.action === "SPINDLE_OFF").slice(0, 30),
-        [filteredRows],
+    const topWoCards = useMemo<WoCardSummary[]>(() => {
+        const grouped = new Map<string, WoAccumulator>();
+
+        filteredRows.forEach((row) => {
+            const woId = resolveWoId(row);
+            if (!woId) {
+                return;
+            }
+
+            const timestamp = row.timestamp;
+            const entry = grouped.get(woId) || buildDefaultAccumulator(woId, row);
+
+            entry.totalDurationSec += row.durationSec || 0;
+            const existingJobTypeTs = entry.jobTypeFirstSeen.get(row.jobType);
+            if (existingJobTypeTs === undefined || row.timestamp < existingJobTypeTs) {
+                entry.jobTypeFirstSeen.set(row.jobType, row.timestamp);
+            }
+            if (!hasMeaningfulPclText(entry.pclText)) {
+                const candidatePcl = resolveRowPclText(row);
+                if (hasMeaningfulPclText(candidatePcl)) {
+                    entry.pclText = candidatePcl;
+                }
+            }
+            if (entry.jobType === "Unknown" && row.jobType !== "Unknown") {
+                entry.jobType = row.jobType;
+            }
+            if (row.action === "WO_START") {
+                entry.hasWoStart = true;
+            }
+            if (row.action === "WO_STOP") {
+                entry.hasWoStop = true;
+            }
+
+            if (timestamp >= entry.latestTimestamp) {
+                entry.latestTimestamp = timestamp;
+                entry.latestEvent = row.action || row.label || row.summary || "EVENT";
+                entry.latestAction = row.action || "";
+                entry.machineId = row.originalLog?.device_id ?? entry.machineId;
+                entry.operatorName =
+                    row.operatorName || String(row.originalLog?.start_name || "").trim() || entry.operatorName;
+            }
+
+            if (row.action === "SPINDLE_OFF") {
+                const classification: RowClassification = row.classification || "UNKNOWN";
+                entry.totalCycles += 1;
+                entry.totalCycleSec += row.durationSec || 0;
+                entry.goodCycles += classification === "GOOD" ? 1 : 0;
+                entry.warningCycles += classification === "WARNING" ? 1 : 0;
+                entry.badCycles += classification === "BAD" ? 1 : 0;
+                entry.unknownCycles += classification === "UNKNOWN" ? 1 : 0;
+
+                if (timestamp >= entry.latestCycleTimestamp) {
+                    entry.latestCycleTimestamp = timestamp;
+                    entry.latestClassification = classification;
+                    entry.latestDurationText = row.durationText || "-";
+                    entry.latestReason = row.reasonText || "No reason";
+                }
+            }
+
+            grouped.set(woId, entry);
+        });
+
+        return [...grouped.values()]
+            .sort((left, right) => right.latestTimestamp - left.latestTimestamp)
+            .slice(0, TOP_WO_LIMIT)
+            .map((entry) => {
+                const orderedJobTags = [...entry.jobTypeFirstSeen.entries()]
+                    .sort((left, right) => {
+                        return left[1] - right[1];
+                    })
+                    .map(([jobType]) => ({
+                        jobType,
+                    }));
+
+                const visibleTags = orderedJobTags.filter((tag) => tag.jobType !== "Unknown");
+                const status = resolveExecutionStatus(entry);
+                return {
+                    woId: entry.woId,
+                    machineId: entry.machineId,
+                    operatorName: entry.operatorName,
+                    jobType: entry.jobType,
+                    executionStatus: status,
+                    pclText: entry.pclText,
+                    totalCycles: entry.totalCycles,
+                    goodCycles: entry.goodCycles,
+                    warningCycles: entry.warningCycles,
+                    badCycles: entry.badCycles,
+                    unknownCycles: entry.unknownCycles,
+                    totalCycleSec: entry.totalCycleSec,
+                    totalDurationSec: entry.totalDurationSec,
+                    avgCycleSec: entry.totalCycles > 0 ? Math.round(entry.totalCycleSec / entry.totalCycles) : 0,
+                    latestTimestamp: entry.latestTimestamp,
+                    latestEvent: entry.latestEvent,
+                    latestClassification: entry.latestClassification,
+                    latestDurationText: entry.latestDurationText,
+                    latestReason: entry.latestReason,
+                    jobTypeTags: visibleTags.length > 0 ? visibleTags : [{ jobType: entry.jobType }],
+                };
+            });
+    }, [filteredRows]);
+
+    useEffect(() => {
+        if (topWoCards.length === 0) {
+            setSelectedWoId(null);
+            setDetailStage(1);
+            setIsOverlayOpen(false);
+            return;
+        }
+
+        if (selectedWoId && !topWoCards.some((card) => card.woId === selectedWoId)) {
+            setSelectedWoId(null);
+            setDetailStage(1);
+            setIsOverlayOpen(false);
+        }
+    }, [selectedWoId, topWoCards]);
+
+    const selectedWoCard = useMemo(
+        () => topWoCards.find((card) => card.woId === selectedWoId) || null,
+        [selectedWoId, topWoCards],
     );
 
-    const kpiCards = useMemo<KpiCard[]>(() => {
-        const uniqueOperators = new Set(
-            allRows
-                .map((row) => row.operatorName)
-                .filter((name): name is string => Boolean(name && name.trim())),
-        );
+    const selectedWoRows = useMemo(() => {
+        if (!selectedWoId) {
+            return [];
+        }
 
-        const activeOrders = new Set(
-            allRows
-                .map((row) => row.woSpecs?.woId || row.originalLog?.wo_id)
-                .filter((value): value is string | number => value !== undefined && value !== null),
-        ).size;
+        return allRows
+            .filter((row) => resolveWoId(row) === selectedWoId)
+            .sort((left, right) => right.timestamp - left.timestamp);
+    }, [allRows, selectedWoId]);
 
-        const machinesRunning = machineSnapshots.filter((machine) => machine.status === "Running").length;
+    const selectedWoDetails = useMemo(() => {
+        if (!selectedWoId) {
+            return null;
+        }
+        const woIdNum = Number(selectedWoId);
+        if (!Number.isFinite(woIdNum)) {
+            return null;
+        }
+        return woDetailsById.get(woIdNum) || null;
+    }, [selectedWoId, woDetailsById]);
 
-        return [
-            {
-                id: "employees",
-                label: "Total Employees",
-                value: String(uniqueOperators.size),
-                tone: "blue",
-                icon: Users,
-            },
-            {
-                id: "present",
-                label: "Present Today",
-                value: String(uniqueOperators.size),
-                tone: "green",
-                icon: User,
-            },
-            {
-                id: "orders",
-                label: "Active Orders",
-                value: String(activeOrders),
-                tone: "slate",
-                icon: Calendar,
-            },
-            {
-                id: "machines",
-                label: "Machines Running",
-                value: `${machinesRunning}/${MACHINE_IDS.length}`,
-                tone: "amber",
-                icon: Wrench,
-            },
-            {
-                id: "efficiency",
-                label: "Overall Efficiency",
-                value: `${hubSummary.goodRatePct}%`,
-                hint: "Classified cycle quality",
-                tone: "amber",
-                icon: Zap,
-            },
-            {
-                id: "units",
-                label: "Units Today",
-                value: String(reportStats?.totalOkQty || 0),
-                tone: "violet",
-                icon: Gauge,
-            },
-        ];
-    }, [allRows, hubSummary.goodRatePct, machineSnapshots, reportStats?.totalOkQty]);
+    const selectedWoStageData = useMemo(() => {
+        if (selectedWoRows.length === 0) {
+            return {
+                startTime: null as Date | null,
+                endTime: null as Date | null,
+                totalWindowSec: 0,
+                startComment: "-",
+                endComment: "-",
+                startEvent: "-",
+                endEvent: "-",
+            };
+        }
 
-    const fetchData = async () => {
+        const latestRow = selectedWoRows[0];
+        const oldestRow = selectedWoRows[selectedWoRows.length - 1];
+        const woStartRow = [...selectedWoRows].reverse().find((row) => row.action === "WO_START");
+        const woStopRow = selectedWoRows.find((row) => row.action === "WO_STOP");
+        const apiStartTime = parseApiDate(selectedWoDetails?.start_time);
+        const apiEndTime = parseApiDate(selectedWoDetails?.end_time);
+
+        const startTime = apiStartTime || woStartRow?.logTime || oldestRow.logTime;
+        const endTime = apiEndTime || woStopRow?.logTime || latestRow.logTime;
+
+        const totalWindowSec =
+            selectedWoDetails && selectedWoDetails.duration > 0
+                ? selectedWoDetails.duration
+                : Math.max(0, Math.round((latestRow.timestamp - oldestRow.timestamp) / 1000));
+
+        const startComment =
+            (hasText(selectedWoDetails?.start_comment) ? selectedWoDetails?.start_comment : "") ||
+            (hasText(woStartRow?.startRowData?.comment) ? woStartRow?.startRowData?.comment : "") ||
+            (hasText(woStartRow?.woHeaderData?.startComment) ? woStartRow?.woHeaderData?.startComment : "") ||
+            (hasText(woStartRow?.originalLog?.start_comment as string | undefined)
+                ? (woStartRow?.originalLog?.start_comment as string)
+                : "") ||
+            "-";
+
+        const endComment =
+            (hasText(selectedWoDetails?.stop_comment) ? selectedWoDetails?.stop_comment : "") ||
+            (hasText(woStopRow?.stopRowData?.reason) ? woStopRow?.stopRowData?.reason : "") ||
+            (hasText(woStopRow?.originalLog?.stop_comment as string | undefined)
+                ? (woStopRow?.originalLog?.stop_comment as string)
+                : "") ||
+            "-";
+
+        return {
+            startTime,
+            endTime,
+            totalWindowSec,
+            startComment,
+            endComment,
+            startEvent: woStartRow?.action || oldestRow.action || oldestRow.label || "WO_START",
+            endEvent: woStopRow?.action || latestRow.action || latestRow.label || "WO_STOP",
+        };
+    }, [selectedWoRows, selectedWoDetails]);
+
+    const ensureWoDetailsLoaded = useCallback(
+        async (woIdValue: string | null) => {
+            if (!woIdValue || !TOKEN) {
+                return;
+            }
+
+            const woIdNum = Number(woIdValue);
+            if (!Number.isFinite(woIdNum)) {
+                return;
+            }
+
+            if (woDetailsById.has(woIdNum)) {
+                return;
+            }
+
+            const now = Date.now();
+            const cached = woDetailsCacheRef.current.get(woIdNum);
+            if (cached && now - cached.fetchedAt <= WO_DETAIL_CACHE_TTL_MS) {
+                if (cached.data) {
+                    setWoDetailsById((prev) => {
+                        if (prev.has(woIdNum)) {
+                            return prev;
+                        }
+                        const next = new Map(prev);
+                        next.set(woIdNum, cached.data);
+                        return next;
+                    });
+                }
+                return;
+            }
+
+            const inflight = inflightWoDetailsRef.current.get(woIdNum);
+            if (inflight) {
+                const data = await inflight;
+                if (data) {
+                    setWoDetailsById((prev) => {
+                        if (prev.has(woIdNum)) {
+                            return prev;
+                        }
+                        const next = new Map(prev);
+                        next.set(woIdNum, data);
+                        return next;
+                    });
+                }
+                return;
+            }
+
+            const request = fetchWoDetails(woIdNum, TOKEN)
+                .catch(() => null)
+                .finally(() => {
+                    inflightWoDetailsRef.current.delete(woIdNum);
+                });
+            inflightWoDetailsRef.current.set(woIdNum, request);
+
+            const fetched = await request;
+            woDetailsCacheRef.current.set(woIdNum, { data: fetched, fetchedAt: Date.now() });
+
+            if (!fetched) {
+                return;
+            }
+
+            setWoDetailsById((prev) => {
+                if (prev.has(woIdNum)) {
+                    return prev;
+                }
+                const next = new Map(prev);
+                next.set(woIdNum, fetched);
+                return next;
+            });
+        },
+        [woDetailsById],
+    );
+
+    const fetchData = async (options?: { force?: boolean }) => {
         setLoading(true);
         setError(null);
 
         if (!TOKEN) {
             setError("Missing VITE_API_TOKEN. Set token to enable live dashboard data.");
-            setAllRows([]);
-            setMachineSnapshots([]);
-            setReportStats(null);
+            setLoading(false);
+            return;
+        }
+
+        const cacheKey = `${rangePreset}|${shiftPreset}|${machineScope}`;
+        const nowTimestamp = Date.now();
+        const cachedOverview = overviewCacheRef.current.get(cacheKey);
+        if (!options?.force && cachedOverview && nowTimestamp - cachedOverview.fetchedAt <= OVERVIEW_CACHE_TTL_MS) {
+            setAllRows(cachedOverview.rows);
+            setLastRefreshed(new Date(cachedOverview.fetchedAt));
             setLoading(false);
             return;
         }
@@ -337,7 +605,6 @@ export default function ProductionHubV2() {
         try {
             const now = new Date();
             const startWindow = getWindowStart(rangePreset, now);
-
             const configForDevice = (deviceId: number): ReportConfig => ({
                 deviceId,
                 startDate: formatDateForApi(startWindow),
@@ -345,9 +612,7 @@ export default function ProductionHubV2() {
                 toleranceSec: 10,
             });
 
-            const deviceNameMap = await fetchDeviceNameMap(TOKEN);
-
-            const deviceLogsPairs = await Promise.all(
+            const deviceLogResults = await Promise.allSettled(
                 MACHINE_IDS.map(async (deviceId) => {
                     const logs = await fetchDeviceLogs(configForDevice(deviceId), TOKEN);
                     const shiftFiltered = logs.filter((log) => belongsToShift(new Date(log.log_time), shiftPreset));
@@ -355,335 +620,506 @@ export default function ProductionHubV2() {
                 }),
             );
 
+            const deviceLogsPairs = deviceLogResults
+                .filter((result): result is PromiseFulfilledResult<readonly [number, DeviceLogEntry[]]> => result.status === "fulfilled")
+                .map((result) => result.value);
+
+            if (deviceLogsPairs.length === 0) {
+                throw new Error("No device logs available for selected range.");
+            }
+
             const logsByDevice = new Map<number, DeviceLogEntry[]>(deviceLogsPairs);
             const combinedLogs = deviceLogsPairs.flatMap(([, logs]) => logs);
+            const scopeLogs = machineScope === "ALL" ? combinedLogs : logsByDevice.get(machineScope) || [];
 
-            const scopeLogs =
-                machineScope === "ALL"
-                    ? combinedLogs
-                    : logsByDevice.get(machineScope) || [];
-
-            const woIds = extractWoIds(scopeLogs);
-            const woDetailsMap = await fetchAllWoDetails(woIds, TOKEN);
-
-            const report = buildReportV2(scopeLogs, woDetailsMap, {
+            const report = buildReportV2(scopeLogs, new Map(), {
                 deviceId: machineScope === "ALL" ? MACHINE_IDS[0] : machineScope,
                 startDate: formatDateForApi(startWindow),
                 endDate: formatDateForApi(now),
                 toleranceSec: 10,
             });
 
+            overviewCacheRef.current.set(cacheKey, { rows: report.filterableRows, fetchedAt: Date.now() });
             setAllRows(report.filterableRows);
-            setReportStats(report.stats);
-            setHubSummary({
-                totalLogs: report.hubSummary.totalLogs,
-                totalJobs: report.hubSummary.totalJobs,
-                totalCycles: report.hubSummary.totalCycles,
-                avgCycleSec: report.hubSummary.avgCycleSec,
-                goodCycles: report.hubSummary.goodCycles,
-                warningCycles: report.hubSummary.warningCycles,
-                badCycles: report.hubSummary.badCycles,
-                unknownCycles: report.hubSummary.unknownCycles,
-                goodRatePct: report.hubSummary.goodRatePct,
-            });
-
-            setMachineSnapshots(
-                MACHINE_IDS.map((deviceId) => buildMachineSnapshot(deviceId, logsByDevice.get(deviceId) || [], deviceNameMap)),
-            );
-
             setLastRefreshed(new Date());
+
+            const failedCount = deviceLogResults.length - deviceLogsPairs.length;
+            if (failedCount > 0) {
+                setError(`Partial data loaded. ${failedCount} machine request(s) failed.`);
+            }
         } catch (err: unknown) {
-            setError(err instanceof Error ? err.message : "Failed to refresh dashboard.");
-            setAllRows([]);
-            setMachineSnapshots([]);
-            setReportStats(null);
+            if (cachedOverview) {
+                setAllRows(cachedOverview.rows);
+                setLastRefreshed(new Date(cachedOverview.fetchedAt));
+                setError(`Live refresh failed, showing cached data. ${err instanceof Error ? err.message : ""}`.trim());
+            } else {
+                setError(err instanceof Error ? err.message : "Failed to refresh dashboard.");
+            }
         } finally {
             setLoading(false);
         }
     };
 
     useEffect(() => {
-        fetchData();
-        const intervalId = window.setInterval(fetchData, REFRESH_INTERVAL_MS);
+        void fetchData();
+        const intervalId = window.setInterval(() => {
+            void fetchData();
+        }, REFRESH_INTERVAL_MS);
         return () => window.clearInterval(intervalId);
     }, [rangePreset, shiftPreset, machineScope]);
 
-    const totalFilteredCycleSec = latestCycles.reduce((sum, row) => sum + (row.durationSec || 0), 0);
+    useEffect(() => {
+        if (!selectedWoId || detailStage < 2) {
+            return;
+        }
+        void ensureWoDetailsLoaded(selectedWoId);
+    }, [detailStage, ensureWoDetailsLoaded, selectedWoId]);
+
+    const selectedWoGoodRate =
+        selectedWoCard && selectedWoCard.totalCycles > 0
+            ? Math.round((selectedWoCard.goodCycles / selectedWoCard.totalCycles) * 100)
+            : 0;
+
+    const closeOverlay = () => {
+        setIsOverlayOpen(false);
+        if (selectedWoId) {
+            setDetailStage(2);
+            return;
+        }
+        setDetailStage(1);
+    };
+
+    const closeAllDetails = () => {
+        setIsOverlayOpen(false);
+        setDetailStage(1);
+        setSelectedWoId(null);
+    };
+
+    useEffect(() => {
+        if (!isOverlayOpen) {
+            return;
+        }
+
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                closeOverlay();
+            }
+        };
+
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        window.addEventListener("keydown", handleEscape);
+
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            window.removeEventListener("keydown", handleEscape);
+        };
+    }, [isOverlayOpen]);
+
+    const handleWoCardClick = (woId: string) => {
+        if (selectedWoId === woId && detailStage === 2 && !isOverlayOpen) {
+            setSelectedWoId(null);
+            setDetailStage(1);
+            return;
+        }
+
+        setSelectedWoId(woId);
+        setDetailStage(2);
+        setIsOverlayOpen(false);
+        void ensureWoDetailsLoaded(woId);
+    };
+
+    const openWoLogsOverlay = () => {
+        if (!selectedWoId) {
+            return;
+        }
+        void ensureWoDetailsLoaded(selectedWoId);
+        setDetailStage(3);
+        setIsOverlayOpen(true);
+    };
+
+    const backToSummary = () => {
+        setDetailStage(2);
+        setIsOverlayOpen(false);
+    };
 
     return (
-        <div className="min-h-screen bg-[#02040b] text-slate-100">
-            <div className="flex min-h-screen">
-                <RailNav />
+        <div className="min-h-screen bg-[radial-gradient(circle_at_1px_1px,#d6dbe3_1px,transparent_1px)] [background-size:20px_20px] p-2 text-slate-900 sm:p-4">
+            <main className="mx-auto w-full max-w-none">
+                <section className="min-h-[calc(100vh-1rem)] w-full rounded-[28px] border border-slate-300 bg-[#dce3ec]/90 p-4 shadow-[0_20px_50px_-32px_rgba(15,23,42,0.6)] sm:min-h-[calc(100vh-2rem)] sm:p-6">
+                    <header className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                        <div className="flex flex-wrap items-center gap-3">
+                            <div className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">Logo</div>
 
-                <main className="flex-1 px-4 py-4 md:px-6 md:py-5">
-                    <div className="mx-auto max-w-[1400px] space-y-4">
-                        <header className="rounded-xl border border-slate-800 bg-[#02060f] px-4 py-3">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                                <div className="relative min-w-[220px] flex-1 max-w-xl">
-                                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                            <nav className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+                                <span className="rounded-md bg-slate-900 px-2.5 py-1.5 font-medium text-white">Dashboard</span>
+                                <Link
+                                    to="/report"
+                                    className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-slate-600 hover:bg-slate-100"
+                                >
+                                    <Download className="h-3.5 w-3.5" />
+                                    Device Logs Report
+                                </Link>
+                            </nav>
+
+                            <div className="ml-auto flex min-w-[240px] items-center gap-2">
+                                <div className="relative flex-1">
+                                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
                                     <input
                                         value={searchQuery}
                                         onChange={(event) => setSearchQuery(event.target.value)}
-                                        placeholder="Search WO, operator, action..."
-                                        className="h-10 w-full rounded-lg border border-slate-800 bg-slate-950 pl-10 pr-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-blue-500/60 focus:outline-none"
+                                        placeholder="Search WO..."
+                                        className="h-9 w-full rounded-md border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-slate-300 focus:outline-none"
                                     />
                                 </div>
-                                <div className="flex items-center gap-2 text-xs text-slate-400">
-                                    <button type="button" className="rounded-lg border border-slate-700 p-2 hover:bg-slate-900">
-                                        <Settings className="h-4 w-4" />
-                                    </button>
-                                    <button type="button" className="rounded-lg border border-slate-700 p-2 hover:bg-slate-900">
-                                        <Bell className="h-4 w-4" />
-                                    </button>
-                                    <span className="rounded-full border border-blue-500/40 bg-blue-500/15 px-3 py-1 text-blue-200">
-                                        mr1398463
-                                    </span>
-                                </div>
+                                <button type="button" className="rounded-md border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50">
+                                    <Bell className="h-4 w-4" />
+                                </button>
+                                <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600">
+                                    <User className="h-3.5 w-3.5" />
+                                    epsilon
+                                </span>
                             </div>
-                        </header>
+                        </div>
+                    </header>
 
-                        <section className="rounded-2xl border border-blue-500/25 bg-gradient-to-r from-blue-500/90 via-indigo-500/80 to-violet-600/80 px-6 py-6 shadow-[0_30px_60px_-40px_rgba(59,130,246,0.8)]">
-                            <div className="flex flex-wrap items-center justify-between gap-4">
+                    <section className="mt-4 rounded-2xl border border-slate-200 bg-white/85 px-3 py-3 sm:px-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <select
+                                value={rangePreset}
+                                onChange={(event) => setRangePreset(event.target.value as RangePreset)}
+                                className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 sm:text-sm"
+                            >
+                                <option value="LAST_30_DAYS">Month</option>
+                                <option value="LAST_7_DAYS">7 Days</option>
+                                <option value="LAST_3_DAYS">3 Days</option>
+                                <option value="DAY">Day</option>
+                            </select>
+
+                            <select
+                                value={shiftPreset}
+                                onChange={(event) => setShiftPreset(event.target.value as ShiftPreset)}
+                                className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 sm:text-sm"
+                            >
+                                <option value="ALL">All Shifts</option>
+                                <option value="A">Shift A (06-14)</option>
+                                <option value="B">Shift B (14-22)</option>
+                                <option value="C">Shift C (22-06)</option>
+                            </select>
+
+                            <select
+                                value={machineScope === "ALL" ? "ALL" : String(machineScope)}
+                                onChange={(event) => setMachineScope(event.target.value === "ALL" ? "ALL" : Number(event.target.value))}
+                                className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 sm:text-sm"
+                            >
+                                <option value="ALL">All Machines</option>
+                                {MACHINE_IDS.map((id) => (
+                                    <option key={id} value={id}>{`Machine ${id}`}</option>
+                                ))}
+                            </select>
+
+                            <Link
+                                to="/report"
+                                className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800 sm:text-sm"
+                            >
+                                <Download className="h-3.5 w-3.5" />
+                                Open /report
+                            </Link>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    void fetchData({ force: true });
+                                }}
+                                disabled={loading}
+                                className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-60 sm:text-sm"
+                            >
+                                <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                                Refresh
+                            </button>
+                        </div>
+
+                        <div className="mt-2 text-xs text-slate-500">Live: {compactTime(lastRefreshed)}</div>
+                    </section>
+
+                    {error ? (
+                        <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                            {error}
+                        </div>
+                    ) : null}
+
+                    <section className="mt-4">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                            <h1 className="text-lg font-semibold text-slate-800 sm:text-xl">WO Overview</h1>
+                            <span className="rounded-full bg-white px-3 py-1 text-xs text-slate-500">
+                                Click card to expand summary · Showing latest {TOP_WO_LIMIT}
+                            </span>
+                        </div>
+
+                        {topWoCards.length === 0 ? (
+                            <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+                                No WO cards available for current filters.
+                            </div>
+                        ) : (
+                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                                {topWoCards.map((card) => {
+                                    const JobTypeIcon = getJobTypeIcon(card.jobType);
+                                    const isStageTwo = selectedWoId === card.woId && detailStage === 2 && !isOverlayOpen;
+                                    const isActive = selectedWoId === card.woId;
+
+                                    return (
+                                        <Expandable
+                                            key={card.woId}
+                                            expanded={isStageTwo}
+                                            onToggle={() => handleWoCardClick(card.woId)}
+                                            transitionDuration={0.22}
+                                            className={`rounded-2xl border bg-white p-4 text-left shadow-[0_12px_24px_-22px_rgba(15,23,42,0.9)] transition hover:-translate-y-0.5 ${isActive ? "border-slate-900 ring-1 ring-slate-300" : "border-slate-200"
+                                                }`}
+                                        >
+                                            <ExpandableTrigger className="w-full text-left">
+                                                <div className="mb-3 flex items-start justify-between gap-2">
+                                                    <div className="flex items-start gap-2 text-xs text-slate-600">
+                                                        <span className="rounded-md bg-slate-100 p-1.5">
+                                                            <JobTypeIcon className="h-3.5 w-3.5" />
+                                                        </span>
+                                                        <div className="flex flex-wrap gap-1">
+                                                            {card.jobTypeTags.slice(0, 3).map((jobTag) => (
+                                                                <span
+                                                                    key={`${card.woId}-${jobTag.jobType}`}
+                                                                    className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${getJobTypeBadgeClass(jobTag.jobType)}`}
+                                                                >
+                                                                    {jobTag.jobType}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                    <span
+                                                        className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ring-1 ${executionStatusBadgeClass[card.executionStatus]}`}
+                                                    >
+                                                        {card.executionStatus}
+                                                    </span>
+                                                </div>
+
+                                                <p className="text-lg font-semibold text-slate-800">{`WO-${card.woId}`}</p>
+                                                <p className="mt-1 text-xs text-slate-500">{`Machine ${card.machineId ?? "-"} · ${card.operatorName}`}</p>
+
+                                                <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                                                    <p className="text-slate-500">PCL Time</p>
+                                                    <p className="font-medium text-slate-700">{card.pclText}</p>
+                                                    <p className="text-slate-500">Cycles</p>
+                                                    <p className="font-medium text-slate-700">{card.totalCycles}</p>
+                                                    <p className="text-slate-500">Total</p>
+                                                    <p className="font-medium text-slate-700">{formatDuration(card.totalDurationSec)}</p>
+                                                </div>
+
+                                                <div className="mt-3 border-t border-slate-100 pt-2.5 text-[11px] text-slate-500">
+                                                    {isStageTwo ? "Summary expanded" : "Click to expand summary"}
+                                                </div>
+                                            </ExpandableTrigger>
+
+                                            <ExpandableContent preset="slide-up" className="mt-3 border-t border-slate-100 pt-3">
+                                                <article className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                                                    <div className="mb-2 flex items-center justify-between gap-2">
+                                                        <h2 className="text-sm font-semibold text-slate-800">WO Summary</h2>
+                                                        <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600">Stage 2</span>
+                                                    </div>
+
+                                                    <div className="grid gap-2 sm:grid-cols-2">
+                                                        <div className="rounded-md border border-slate-200 bg-white p-2">
+                                                            <p className="text-[11px] text-slate-500">Starting Time</p>
+                                                            <p className="mt-0.5 text-xs font-semibold text-slate-800">
+                                                                {formatDateTime(selectedWoStageData.startTime)}
+                                                            </p>
+                                                        </div>
+                                                        <div className="rounded-md border border-slate-200 bg-white p-2">
+                                                            <p className="text-[11px] text-slate-500">Ending Time</p>
+                                                            <p className="mt-0.5 text-xs font-semibold text-slate-800">
+                                                                {formatDateTime(selectedWoStageData.endTime)}
+                                                            </p>
+                                                        </div>
+                                                        <div className="rounded-md border border-slate-200 bg-white p-2">
+                                                            <p className="text-[11px] text-slate-500">Total</p>
+                                                            <p className="mt-0.5 text-xs font-semibold text-slate-800">
+                                                                {formatDuration(selectedWoStageData.totalWindowSec)}
+                                                            </p>
+                                                        </div>
+                                                        <div className="rounded-md border border-slate-200 bg-white p-2">
+                                                            <p className="text-[11px] text-slate-500">Good Rate</p>
+                                                            <p className="mt-0.5 text-xs font-semibold text-slate-800">{`${selectedWoGoodRate}%`}</p>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="mt-2 rounded-md border border-slate-200 bg-white p-2.5">
+                                                        <div className="mb-1.5 flex items-center justify-between gap-2">
+                                                            <p className="text-xs font-semibold text-slate-800">Comments</p>
+                                                            <span
+                                                                className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${getJobTypeBadgeClass(card.jobType)}`}
+                                                            >
+                                                                {card.jobType}
+                                                            </span>
+                                                        </div>
+                                                        <div className="space-y-2">
+                                                            <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                                                                <p className="text-[11px] text-slate-500">{`Starting Comment · ${selectedWoStageData.startEvent}`}</p>
+                                                                <p className="mt-0.5 text-xs text-slate-700">{selectedWoStageData.startComment}</p>
+                                                            </div>
+                                                            <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                                                                <p className="text-[11px] text-slate-500">{`Ending Comment · ${selectedWoStageData.endEvent}`}</p>
+                                                                <p className="mt-0.5 text-xs text-slate-700">{selectedWoStageData.endComment}</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </article>
+
+                                                <div className="mt-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={openWoLogsOverlay}
+                                                        className="inline-flex h-8 items-center rounded-md border border-slate-200 bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800"
+                                                    >
+                                                        Open WO Logs
+                                                    </button>
+                                                </div>
+                                            </ExpandableContent>
+                                        </Expandable>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </section>
+                </section>
+            </main>
+
+            {isOverlayOpen && selectedWoCard && detailStage === 3 ? (
+                <div className="fixed inset-0 z-50 bg-slate-950/35 p-2 backdrop-blur-[2px] sm:p-5" onClick={closeOverlay}>
+                    <div
+                        className="mx-auto flex h-full w-full max-w-[1700px] flex-col rounded-[28px] border border-slate-300 bg-[#dce3ec] p-4 shadow-[0_26px_60px_-34px_rgba(15,23,42,0.85)] sm:p-6"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+                                <button
+                                    type="button"
+                                    onClick={closeAllDetails}
+                                    className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-600 hover:bg-slate-50"
+                                >
+                                    1. WO Overview
+                                </button>
+                                <span
+                                    className={`rounded-full px-3 py-1 ${detailStage === 2
+                                            ? "bg-slate-900 text-white"
+                                            : "border border-slate-200 bg-white text-slate-600"
+                                        }`}
+                                >
+                                    2. WO Summary
+                                </span>
+                                <span
+                                    className={`rounded-full px-3 py-1 ${detailStage === 3
+                                            ? "bg-slate-900 text-white"
+                                            : "border border-slate-200 bg-white text-slate-600"
+                                        }`}
+                                >
+                                    3. WO Logs
+                                </span>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={closeOverlay}
+                                className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50"
+                            >
+                                <X className="h-3.5 w-3.5" />
+                                Close
+                            </button>
+                        </div>
+
+                        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div>
-                                    <h1 className="text-3xl font-semibold tracking-tight text-white">Production Dashboard</h1>
-                                    <p className="mt-1 text-sm text-blue-100">Real-time manufacturing intelligence</p>
+                                    <p className="text-xl font-semibold text-slate-800">{`WO-${selectedWoCard.woId}`}</p>
+                                    <p className="mt-1 text-sm text-slate-600">{`Machine ${selectedWoCard.machineId ?? "-"} · ${selectedWoCard.operatorName}`}</p>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <div className="rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-sm text-white">
-                                        Live {compactTime(lastRefreshed)}
-                                    </div>
-                                    <button
-                                        onClick={fetchData}
-                                        disabled={loading}
-                                        className="inline-flex items-center gap-2 rounded-lg border border-white/25 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/20 disabled:opacity-60"
+                                    <span
+                                        className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${getJobTypeBadgeClass(selectedWoCard.jobType)}`}
                                     >
-                                        <RefreshCcw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                                        Refresh
-                                    </button>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section className="rounded-xl border border-slate-700 bg-slate-900/75 px-4 py-3">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <select
-                                    value={rangePreset}
-                                    onChange={(event) => setRangePreset(event.target.value as RangePreset)}
-                                    className="h-10 rounded-lg border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100"
-                                >
-                                    <option value="TODAY">Today</option>
-                                    <option value="LAST_6H">Last 6h</option>
-                                    <option value="LAST_24H">Last 24h</option>
-                                </select>
-
-                                <select
-                                    value={shiftPreset}
-                                    onChange={(event) => setShiftPreset(event.target.value as ShiftPreset)}
-                                    className="h-10 rounded-lg border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100"
-                                >
-                                    <option value="ALL">All Shifts</option>
-                                    <option value="A">Shift A (06-14)</option>
-                                    <option value="B">Shift B (14-22)</option>
-                                    <option value="C">Shift C (22-06)</option>
-                                </select>
-
-                                <select
-                                    value={machineScope === "ALL" ? "ALL" : String(machineScope)}
-                                    onChange={(event) => setMachineScope(event.target.value === "ALL" ? "ALL" : Number(event.target.value))}
-                                    className="h-10 rounded-lg border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100"
-                                >
-                                    <option value="ALL">All Machines</option>
-                                    {MACHINE_IDS.map((id) => (
-                                        <option key={id} value={id}>{`Machine ${id}`}</option>
-                                    ))}
-                                </select>
-
-                                <div className="ml-auto flex items-center gap-2">
-                                    <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-300">
-                                        Mode: {modeLabel(filterState.mode)}
+                                        {selectedWoCard.jobType}
                                     </span>
-                                    <button
-                                        type="button"
-                                        onClick={() =>
-                                            setFilterState((previous) => ({
-                                                ...previous,
-                                                mode:
-                                                    previous.mode === "GOOD_ONLY"
-                                                        ? "GOOD_WARNING"
-                                                        : previous.mode === "GOOD_WARNING"
-                                                            ? "ALL"
-                                                            : "GOOD_ONLY",
-                                            }))
-                                        }
-                                        className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800"
+                                    <span
+                                        className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${executionStatusBadgeClass[selectedWoCard.executionStatus]}`}
                                     >
-                                        Cycle Mode
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() =>
-                                            setFilterState((previous) => ({
-                                                ...previous,
-                                                includeUnknown: !previous.includeUnknown,
-                                            }))
-                                        }
-                                        className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800"
-                                    >
-                                        Unknown {filterState.includeUnknown ? "ON" : "OFF"}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() =>
-                                            setFilterState((previous) => ({
-                                                ...previous,
-                                                includeBreakExtensions: !previous.includeBreakExtensions,
-                                            }))
-                                        }
-                                        className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800"
-                                    >
-                                        Breaks {filterState.includeBreakExtensions ? "ON" : "OFF"}
-                                    </button>
-                                    <Link
-                                        to="/report-v2"
-                                        className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-600 bg-slate-800/80 px-3 text-sm font-medium hover:bg-slate-700"
-                                    >
-                                        <Download className="h-4 w-4" />
-                                        Export
-                                    </Link>
-                                </div>
-                            </div>
-                        </section>
-
-                        {error ? (
-                            <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                                {error}
-                            </div>
-                        ) : null}
-
-                        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-                            {kpiCards.map((card) => (
-                                <KpiCardItem key={card.id} card={card} />
-                            ))}
-                        </section>
-
-                        <section className="space-y-3">
-                            <div className="flex items-center gap-3">
-                                <h2 className="text-2xl font-semibold text-slate-100">Live Production Pulse</h2>
-                                <span className="rounded-md bg-emerald-500/20 px-2.5 py-1 text-xs font-semibold text-emerald-200">
-                                    Live Tracking
-                                </span>
-                            </div>
-
-                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                                {machineSnapshots.map((machine) => (
-                                    <article key={machine.deviceId} className="rounded-2xl border border-slate-800 bg-[#06122b] p-4">
-                                        <div className="mb-3 flex items-center justify-between">
-                                            <h3 className="text-3xl font-semibold text-slate-100">{machine.deviceName}</h3>
-                                            <span className="h-3 w-3 rounded-full bg-slate-500/70" />
-                                        </div>
-                                        <p className="text-sm text-slate-400">ID: {machine.deviceId}</p>
-                                        <div className="mt-4 space-y-2 text-sm text-slate-300">
-                                            <div className="flex items-center justify-between">
-                                                <span>Active WO</span>
-                                                <span className="rounded bg-slate-900 px-2 py-1 text-slate-100">{machine.activeWo}</span>
-                                            </div>
-                                            <div className="flex items-center justify-between">
-                                                <span>Status</span>
-                                                <span className={`rounded px-2 py-1 text-xs font-semibold ${statusToneClass[machine.status]}`}>
-                                                    {machine.status}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <div className="mt-4 border-t border-slate-800 pt-3 text-xs text-slate-400">
-                                            <p className="uppercase tracking-wide">Latest Event</p>
-                                            <p className="mt-1 text-sm text-slate-200">{machine.latestEvent} @ {machine.latestEventTime}</p>
-                                        </div>
-                                    </article>
-                                ))}
-                            </div>
-                        </section>
-
-                        <section className="rounded-xl border border-slate-800 bg-slate-900/80 p-4">
-                            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                                <h2 className="text-lg font-semibold">Classified Cycle Feed</h2>
-                                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-3 py-1">
-                                        <Cpu className="h-3.5 w-3.5" />
-                                        Rows: {filteredRows.length}
-                                    </span>
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-3 py-1">
-                                        <Clock3 className="h-3.5 w-3.5" />
-                                        Cycle Time: {formatDuration(totalFilteredCycleSec)}
+                                        {selectedWoCard.executionStatus}
                                     </span>
                                 </div>
                             </div>
+                        </div>
 
-                            {latestCycles.length === 0 ? (
-                                <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-6 text-center text-sm text-slate-400">
-                                    No cycle rows for current filters.
-                                </div>
-                            ) : (
-                                <div className="overflow-x-auto">
-                                    <table className="w-full min-w-[980px] text-left text-sm">
-                                        <thead>
-                                            <tr className="border-b border-slate-800 text-xs uppercase tracking-wide text-slate-400">
-                                                <th className="px-3 py-2">Time</th>
-                                                <th className="px-3 py-2">WO</th>
-                                                <th className="px-3 py-2">Duration</th>
-                                                <th className="px-3 py-2">Class</th>
-                                                <th className="px-3 py-2">Reason</th>
-                                                <th className="px-3 py-2">Operator</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {latestCycles.map((row) => {
-                                                const classification = row.classification || "UNKNOWN";
-                                                return (
-                                                    <tr key={row.rowId} className="border-b border-slate-800/80 hover:bg-slate-950/60">
-                                                        <td className="px-3 py-2 font-mono text-xs text-slate-300 whitespace-nowrap">
-                                                            {row.logTime.toLocaleString("en-GB")}
-                                                        </td>
-                                                        <td className="px-3 py-2 whitespace-nowrap">{row.woSpecs?.woId || row.originalLog?.wo_id || "-"}</td>
-                                                        <td className="px-3 py-2 font-mono whitespace-nowrap">{row.durationText || "-"}</td>
-                                                        <td className="px-3 py-2 whitespace-nowrap">
-                                                            <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ring-1 ${classificationBadgeClass[classification] || classificationBadgeClass.UNKNOWN}`}>
-                                                                {classification}
-                                                            </span>
-                                                        </td>
-                                                        <td className="px-3 py-2 text-slate-300">{row.reasonText || "-"}</td>
-                                                        <td className="px-3 py-2 whitespace-nowrap text-slate-300">{row.operatorName || "-"}</td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            )}
-                        </section>
-
-                        <footer className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-xs text-slate-400">
-                            <div className="flex flex-wrap items-center gap-3">
-                                <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2 py-1">
-                                    <Activity className="h-3.5 w-3.5" />
-                                    Logs: {hubSummary.totalLogs}
-                                </span>
-                                <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2 py-1">
-                                    <BarChart3 className="h-3.5 w-3.5" />
-                                    Jobs: {hubSummary.totalJobs}
-                                </span>
-                                <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2 py-1">
-                                    <Gauge className="h-3.5 w-3.5" />
-                                    Avg Cycle: {formatDuration(hubSummary.avgCycleSec)}
-                                </span>
-                                <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2 py-1">
-                                    <ShieldAlert className="h-3.5 w-3.5" />
-                                    Unknown: {hubSummary.unknownCycles}
-                                </span>
+                        <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white p-4">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                <h2 className="text-base font-semibold text-slate-800">WO Logs</h2>
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">Stage 3</span>
                             </div>
-                        </footer>
+
+                            <div className="mb-3 flex items-center justify-between text-xs text-slate-500">
+                                <p>{`WO-${selectedWoCard.woId}`}</p>
+                                <p>{`Total rows: ${selectedWoRows.length}`}</p>
+                            </div>
+
+                            <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-slate-200">
+                                <table className="w-full min-w-[760px] text-left text-xs">
+                                    <thead className="bg-slate-50 text-slate-500">
+                                        <tr>
+                                            <th className="px-3 py-2">Time</th>
+                                            <th className="px-3 py-2">Action</th>
+                                            <th className="px-3 py-2">Duration</th>
+                                            <th className="px-3 py-2">Class</th>
+                                            <th className="px-3 py-2">Reason</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {selectedWoRows.map((row) => {
+                                            const rowClassification: RowClassification = row.classification || "UNKNOWN";
+                                            const rowLabel = row.action || row.label || row.summary || "EVENT";
+                                            return (
+                                                <tr key={row.rowId} className="border-t border-slate-100 text-slate-700">
+                                                    <td className="px-3 py-2 whitespace-nowrap">{row.logTime.toLocaleString("en-GB")}</td>
+                                                    <td className="px-3 py-2 whitespace-nowrap">{rowLabel}</td>
+                                                    <td className="px-3 py-2 whitespace-nowrap">{row.durationText || "-"}</td>
+                                                    <td className="px-3 py-2 whitespace-nowrap">
+                                                        <span
+                                                            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${classificationBadgeClass[rowClassification]}`}
+                                                        >
+                                                            {rowClassification}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-3 py-2">{row.reasonText || "-"}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={backToSummary}
+                                    className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50"
+                                >
+                                    Back To Summary
+                                </button>
+                                <Link
+                                    to="/report"
+                                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800"
+                                >
+                                    <Download className="h-3.5 w-3.5" />
+                                    Open /report
+                                </Link>
+                            </div>
+                        </div>
                     </div>
-                </main>
-            </div>
+                </div>
+            ) : null}
         </div>
     );
 }
