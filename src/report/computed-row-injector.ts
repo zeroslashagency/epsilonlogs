@@ -132,9 +132,35 @@ export function injectComputedRows(
             });
         }
     } else {
-        // PRODUCTION: Standard behavior (cycles)
+        // PRODUCTION: Standard behavior (cycles) or estimated blocks
         for (let bIdx = 0; bIdx < jobBlocks.length; bIdx++) {
             const block = jobBlocks[bIdx]!;
+
+            // ESTIMATED: Non-spindle machine — render single block row
+            if (block.isEstimated) {
+                const refTime = woStartLog
+                    ? new Date(woStartLog.log_time).getTime()
+                    : new Date(segment.logs[0]!.log_time).getTime();
+
+                rows.push({
+                    rowId: `estimated-job-${segment.woId}-${bIdx}`,
+                    logId: woStartLog?.log_id ?? 0,
+                    logTime: new Date(refTime + (bIdx * 100)),
+                    action: "",
+                    label: block.label,
+                    durationText: formatDuration(block.totalSec),
+                    durationSec: block.totalSec,
+                    summary: "⏱ Estimated (no spindle data)",
+                    jobType: segment.jobType,
+                    isJobBlock: true,
+                    isEstimated: true,
+                    jobBlockLabel: block.label,
+                    timestamp: refTime + 1000 + (bIdx * 100),
+                    operatorName: operator,
+                    woSpecs,
+                });
+                continue;
+            }
 
             for (let cIdx = 0; cIdx < block.cycles.length; cIdx++) {
                 const cycle = block.cycles[cIdx]!;

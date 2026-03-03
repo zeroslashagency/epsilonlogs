@@ -28,8 +28,9 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
                 segments.push(activeSegment);
                 activeSegment = null;
             }
-            // Parse job_type from log (API returns string or number)
-            const rawType = log.job_type ? parseInt(String(log.job_type), 10) : JobType.PRODUCTION;
+            // Parse job_type from log (API may return string or number)
+            const parsedType = log.job_type != null ? parseInt(String(log.job_type), 10) : NaN;
+            const rawType = Number.isFinite(parsedType) && parsedType > 0 ? parsedType : JobType.PRODUCTION;
 
             activeSegment = {
                 woId: log.wo_id,
@@ -40,6 +41,32 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
                 rawJobType: rawType,
             };
         } else if (log.action === "WO_STOP") {
+            if (activeSegment && activeSegment.woId === log.wo_id) {
+                activeSegment.logs.push(log);
+                segments.push(activeSegment);
+                activeSegment = null;
+            } else {
+                unassignedLogs.push(log);
+            }
+        } else if (log.action === "MTR_ON") {
+            // Maintenance start — treat like WO_START with job_type=MAINTENANCE
+            if (activeSegment) {
+                segments.push(activeSegment);
+                activeSegment = null;
+            }
+            const mtrType = log.job_type != null ? parseInt(String(log.job_type), 10) : NaN;
+            const mtrRawType = Number.isFinite(mtrType) && mtrType > 0 ? mtrType : JobType.MAINTENANCE;
+
+            activeSegment = {
+                woId: log.wo_id,
+                logs: [log],
+                spindleCycles: [],
+                pausePeriods: [],
+                jobType: mapJobType(mtrRawType),
+                rawJobType: mtrRawType,
+            };
+        } else if (log.action === "MTR_OFF") {
+            // Maintenance end — treat like WO_STOP
             if (activeSegment && activeSegment.woId === log.wo_id) {
                 activeSegment.logs.push(log);
                 segments.push(activeSegment);

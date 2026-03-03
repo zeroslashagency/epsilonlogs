@@ -43,6 +43,7 @@ interface WoJobTag {
 
 interface WoCardSummary {
     woId: string;
+    woDisplayId: string;
     machineId: number | null;
     operatorName: string;
     jobType: WoJobType;
@@ -66,6 +67,7 @@ interface WoCardSummary {
 
 interface WoAccumulator {
     woId: string;
+    woDisplayId: string;
     machineId: number | null;
     operatorName: string;
     jobType: WoJobType;
@@ -177,7 +179,10 @@ function toPclText(value: unknown): string {
     }
 
     const numeric = Number(value);
-    if (Number.isFinite(numeric) && numeric > 0) {
+    if (Number.isFinite(numeric)) {
+        if (numeric <= 0) {
+            return "-";
+        }
         return formatDuration(numeric);
     }
 
@@ -203,6 +208,20 @@ function resolveRowPclText(row: ReportRow): string {
     }
 
     return row.woSpecs?.pclText || "-";
+}
+
+function resolveDisplayWoId(row: ReportRow, internalWoId: string): string {
+    const fromLog = String(row.originalLog?.wo_name || "").trim();
+    if (fromLog.length > 0) {
+        return fromLog;
+    }
+
+    const fromSpecs = String(row.woSpecs?.woId || "").trim();
+    if (fromSpecs.length > 0 && fromSpecs !== "0") {
+        return fromSpecs;
+    }
+
+    return internalWoId;
 }
 
 function resolveExecutionStatus(entry: WoAccumulator): WoExecutionStatus {
@@ -252,6 +271,7 @@ function buildDefaultAccumulator(woId: string, row: ReportRow): WoAccumulator {
     const operatorName = row.operatorName || String(row.originalLog?.start_name || "").trim() || "Unknown";
     return {
         woId,
+        woDisplayId: resolveDisplayWoId(row, woId),
         machineId: row.originalLog?.device_id ?? null,
         operatorName,
         jobType: logJobType,
@@ -303,7 +323,7 @@ export default function ProductionHubV2() {
         }
 
         return allRows.filter((row) => {
-            const wo = String(row.woSpecs?.woId || row.originalLog?.wo_id || "").toLowerCase();
+            const wo = String(row.originalLog?.wo_name || row.woSpecs?.woId || row.originalLog?.wo_id || "").toLowerCase();
             const operator = (row.operatorName || "").toLowerCase();
             const action = (row.action || "").toLowerCase();
             const reason = (row.reasonText || "").toLowerCase();
@@ -322,6 +342,8 @@ export default function ProductionHubV2() {
 
             const timestamp = row.timestamp;
             const entry = grouped.get(woId) || buildDefaultAccumulator(woId, row);
+            const operatorFromRow = row.operatorName || String(row.originalLog?.start_name || "").trim();
+            const displayWoIdFromRow = resolveDisplayWoId(row, woId);
 
             entry.totalDurationSec += row.durationSec || 0;
             const existingJobTypeTs = entry.jobTypeFirstSeen.get(row.jobType);
@@ -337,6 +359,15 @@ export default function ProductionHubV2() {
             if (entry.jobType === "Unknown" && row.jobType !== "Unknown") {
                 entry.jobType = row.jobType;
             }
+            if (entry.operatorName === "Unknown" && operatorFromRow) {
+                entry.operatorName = operatorFromRow;
+            }
+            if (entry.machineId === null && typeof row.originalLog?.device_id === "number") {
+                entry.machineId = row.originalLog.device_id;
+            }
+            if (entry.woDisplayId === entry.woId && displayWoIdFromRow !== woId) {
+                entry.woDisplayId = displayWoIdFromRow;
+            }
             if (row.action === "WO_START") {
                 entry.hasWoStart = true;
             }
@@ -349,8 +380,8 @@ export default function ProductionHubV2() {
                 entry.latestEvent = row.action || row.label || row.summary || "EVENT";
                 entry.latestAction = row.action || "";
                 entry.machineId = row.originalLog?.device_id ?? entry.machineId;
-                entry.operatorName =
-                    row.operatorName || String(row.originalLog?.start_name || "").trim() || entry.operatorName;
+                entry.operatorName = operatorFromRow || entry.operatorName;
+                entry.woDisplayId = displayWoIdFromRow || entry.woDisplayId;
             }
 
             if (row.action === "SPINDLE_OFF") {
@@ -389,6 +420,7 @@ export default function ProductionHubV2() {
                 const status = resolveExecutionStatus(entry);
                 return {
                     woId: entry.woId,
+                    woDisplayId: entry.woDisplayId,
                     machineId: entry.machineId,
                     operatorName: entry.operatorName,
                     jobType: entry.jobType,
@@ -900,7 +932,7 @@ export default function ProductionHubV2() {
                                                     </span>
                                                 </div>
 
-                                                <p className="text-lg font-semibold text-slate-800">{`WO-${card.woId}`}</p>
+                                                <p className="text-lg font-semibold text-slate-800">{`WO-${card.woDisplayId}`}</p>
                                                 <p className="mt-1 text-xs text-slate-500">{`Machine ${card.machineId ?? "-"} · ${card.operatorName}`}</p>
 
                                                 <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
@@ -1036,7 +1068,7 @@ export default function ProductionHubV2() {
                         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
                             <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div>
-                                    <p className="text-xl font-semibold text-slate-800">{`WO-${selectedWoCard.woId}`}</p>
+                                    <p className="text-xl font-semibold text-slate-800">{`WO-${selectedWoCard.woDisplayId}`}</p>
                                     <p className="mt-1 text-sm text-slate-600">{`Machine ${selectedWoCard.machineId ?? "-"} · ${selectedWoCard.operatorName}`}</p>
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -1061,7 +1093,7 @@ export default function ProductionHubV2() {
                             </div>
 
                             <div className="mb-3 flex items-center justify-between text-xs text-slate-500">
-                                <p>{`WO-${selectedWoCard.woId}`}</p>
+                                <p>{`WO-${selectedWoCard.woDisplayId}`}</p>
                                 <p>{`Total rows: ${selectedWoRows.length}`}</p>
                             </div>
 

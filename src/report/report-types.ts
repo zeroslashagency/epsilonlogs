@@ -23,7 +23,7 @@ export interface DeviceLogEntry {
     status?: string;
     duration?: number;
     uid?: number;
-    job_type?: string;
+    job_type?: string | number;
     [key: string]: unknown;
 }
 
@@ -73,6 +73,9 @@ export interface WoDetails {
     duration: number;       // total WO duration in seconds
     job_type?: number;      // 1=Production, 2=Setting, etc.
     target_duration?: number; // Used for Job Type 2 instead of PCL
+    time_saved?: number | null;    // time_saved from API
+    load_time?: number | null;     // load_time from API
+    idle_time?: number | null;     // idle_time from API
 }
 
 // --- Internal Processing Types ---
@@ -114,6 +117,7 @@ export interface JobBlock {
     totalSec: number;
     varianceSec: number | null;
     pcl: number | null;
+    isEstimated?: boolean; // true for non-spindle machines (no SPINDLE_ON/OFF)
 }
 
 // --- Display / Report Types ---
@@ -180,6 +184,7 @@ export interface ReportRow {
     isJobBlock?: boolean | undefined;
     varianceColor?: "red" | "green" | "neutral" | undefined;
     isComputed?: boolean | undefined;       // Ideal Time, Loading, Idle — skip S.No
+    isEstimated?: boolean | undefined;       // Estimated data (no spindle sensor)
 
     // Special row types
     isWoHeader?: boolean;

@@ -52,7 +52,7 @@ export function buildReport(
             // A. Pair Cycles & Pauses (Always useful for raw metrics)
             pairSpindleCycles(segment);
 
-            const segCuttingSec = segment.spindleCycles.reduce((sum, c) => sum + c.durationSec, 0);
+            let segCuttingSec = segment.spindleCycles.reduce((sum, c) => sum + c.durationSec, 0);
             const segPauseSec = segment.pausePeriods.reduce((sum, p) => sum + p.durationSec, 0);
 
             totalCycles += segment.spindleCycles.length;
@@ -81,6 +81,11 @@ export function buildReport(
                 device_id: 0,
                 duration: 0,
             };
+
+            // Ensure woDetails carries the job_type from the segment logs
+            if (details.job_type == null && segment.rawJobType != null) {
+                details.job_type = segment.rawJobType;
+            }
 
             totalWoDurationSec += details.duration;
             totalAllotedQty += details.alloted_qty;
@@ -114,8 +119,46 @@ export function buildReport(
                     toleranceSec: config.toleranceSec,
                     splitDisableWindows,
                 });
+
+                // FALLBACK: Non-spindle machine — 0 cycles but has ok_qty and PCL
+                if (blocks.length === 0 && details.ok_qty > 0) {
+                    const pclSec = details.pcl || 0;
+                    const woDurationSec = details.duration || 0;
+                    const estimatedCuttingSec = Math.max(0, woDurationSec - segPauseSec);
+
+                    if (pclSec > 0 && woDurationSec > 0) {
+                        // Single consolidated estimated block showing ok_qty parts
+                        blocks.push({
+                            label: `ESTIMATED — ${details.ok_qty} parts`,
+                            cycles: [],
+                            totalSec: estimatedCuttingSec,
+                            varianceSec: null,
+                            pcl: pclSec,
+                            isEstimated: true,
+                        });
+                        segCuttingSec = estimatedCuttingSec;
+                        totalCuttingSec += estimatedCuttingSec;
+                        totalCycles += details.ok_qty;
+                    } else if (woDurationSec > 0) {
+                        // No PCL but has duration — single estimated block
+                        blocks.push({
+                            label: `ESTIMATED — ${details.ok_qty} parts`,
+                            cycles: [],
+                            totalSec: estimatedCuttingSec,
+                            varianceSec: null,
+                            pcl: null,
+                            isEstimated: true,
+                        });
+                        segCuttingSec = estimatedCuttingSec;
+                        totalCuttingSec += estimatedCuttingSec;
+                        totalCycles += details.ok_qty;
+                    }
+                }
             }
-            totalJobs += blocks.length;
+            // For estimated blocks: jobs = ok_qty (but only 1 display row)
+            const hasEstimated = blocks.some(b => b.isEstimated);
+            const segJobCount = hasEstimated ? details.ok_qty : blocks.length;
+            totalJobs += segJobCount;
 
             // D. Inject Computed Rows (pass woDetails for headers/summaries)
             let rows = injectComputedRows(segment, blocks, details);
@@ -148,7 +191,7 @@ export function buildReport(
                 operator: operatorName,
                 setting: details.setting,
                 jobType: segment.jobType,
-                jobs: blocks.length,
+                jobs: hasEstimated ? details.ok_qty : blocks.length,
                 cycles: segment.spindleCycles.length,
                 cuttingSec: segCuttingSec,
                 pauseSec: segPauseSec,

@@ -121,6 +121,9 @@ export async function fetchWoDetails(
             duration: wo.duration || 0,
             job_type: wo.job_type,
             target_duration: wo.target_duration,
+            time_saved: wo.time_saved ?? null,
+            load_time: wo.load_time ?? null,
+            idle_time: wo.idle_time ?? null,
         };
 
     } catch (error) {
