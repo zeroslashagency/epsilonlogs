@@ -88,3 +88,91 @@ test("Setting Job (Type 2) should NOT be grouped into sub-jobs", () => {
     expect(row!.label).toContain("SETTING PROCESS");
     expect(row!.durationSec).toBe(900); // Full WO duration
 });
+
+test.each([
+    [JobType.CALIBRATION, "Calibration", "CALIBRATION PROCESS"],
+    [JobType.MAN, "Man", "MAN PROCESS"],
+    [JobType.TRAINING, "Training", "TRAINING PROCESS"],
+    [JobType.RD, "RD", "RD PROCESS"],
+    [JobType.MAN_PROD, "Man Production", "MAN PRODUCTION PROCESS"],
+    [JobType.MAN_SETTING, "Man Setting", "MAN SETTING PROCESS"],
+])("Non-production job type %s should keep label %s", (jobType, expectedJobType, expectedLabel) => {
+    const woId = 200 + Number(jobType);
+    const logs: DeviceLogEntry[] = [
+        createLog(1000 + Number(jobType), "2026-02-18T12:00:00Z", "WO_START", woId, jobType),
+        createLog(1001 + Number(jobType), "2026-02-18T12:10:00Z", "WO_STOP", woId),
+    ];
+
+    const woDetails = new Map<number, WoDetails>();
+    woDetails.set(woId, {
+        id: woId,
+        wo_id_str: String(woId),
+        part_no: `PART-${jobType}`,
+        pcl: null,
+        start_time: "2026-02-18T12:00:00Z",
+        end_time: "2026-02-18T12:10:00Z",
+        duration: 600,
+        alloted_qty: 0,
+        ok_qty: 0,
+        reject_qty: 0,
+        device_id: 1,
+        setting: "",
+        start_name: "Op1",
+        stop_name: "Op1",
+        start_comment: `${expectedJobType} start`,
+        stop_comment: `${expectedJobType} stop`,
+        extensions: [],
+        start_uid: null,
+        stop_uid: null,
+        job_type: Number(jobType),
+    });
+
+    const report = buildReport(logs, woDetails, config);
+    const jobRows = report.rows.filter((row) => row.isJobBlock);
+
+    expect(jobRows).toHaveLength(1);
+    expect(jobRows[0]?.jobType).toBe(expectedJobType);
+    expect(jobRows[0]?.label).toBe(expectedLabel);
+
+    const breakdown = report.stats.woBreakdowns.find((row) => row.woId === String(woId));
+    expect(breakdown?.jobType).toBe(expectedJobType);
+});
+
+test("Fallback segment should infer non-production job type when WO_START is outside range", () => {
+    const logs: DeviceLogEntry[] = [
+        createLog(2001, "2026-02-18T13:00:00Z", "KEY_ON", 307, JobType.MAN_SETTING),
+        createLog(2002, "2026-02-18T13:12:00Z", "WO_STOP", 307, JobType.MAN_SETTING),
+    ];
+
+    const woDetails = new Map<number, WoDetails>();
+    woDetails.set(307, {
+        id: 307,
+        wo_id_str: "307",
+        part_no: "PART-52",
+        pcl: null,
+        start_time: null,
+        end_time: "2026-02-18T13:12:00Z",
+        duration: 720,
+        alloted_qty: 0,
+        ok_qty: 0,
+        reject_qty: 0,
+        device_id: 1,
+        setting: "",
+        start_name: "Op1",
+        stop_name: "Op1",
+        start_comment: "",
+        stop_comment: "done",
+        extensions: [],
+        start_uid: null,
+        stop_uid: null,
+        job_type: JobType.MAN_SETTING,
+    });
+
+    const report = buildReport(logs, woDetails, config);
+
+    const stopRow = report.rows.find((row) => row.action === "WO_STOP");
+    expect(stopRow?.jobType).toBe("Man Setting");
+
+    const breakdown = report.stats.woBreakdowns.find((row) => row.woId === "307");
+    expect(breakdown?.jobType).toBe("Man Setting");
+});

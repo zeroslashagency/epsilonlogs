@@ -8,7 +8,8 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check:sample": "tsx scripts/check-sample.ts"
+    "check:sample": "tsx scripts/check-sample.ts",
+    "preview:grouped-colors": "tsx scripts/preview-grouped-job-colors.ts"
   },
   "dependencies": {
     "@types/react-router-dom": "^5.3.3",

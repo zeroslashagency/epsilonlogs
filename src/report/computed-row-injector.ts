@@ -25,6 +25,8 @@ export function injectComputedRows(
 
     const woStartLog = segment.logs.find((l: DeviceLogEntry) => l.action === "WO_START");
     const woStopLog = segment.logs.find((l: DeviceLogEntry) => l.action === "WO_STOP");
+    const maintenanceStartLog = segment.logs.find((l: DeviceLogEntry) => l.action === "MTR_ON");
+    const segmentStartLog = woStartLog || maintenanceStartLog || segment.logs[0];
 
     // Pre-calculate woSpecs for all rows in this segment
     let woSpecs: { woId: string; pclText: string; allotted: number } | undefined = undefined;
@@ -113,11 +115,11 @@ export function injectComputedRows(
     if (segment.rawJobType && segment.rawJobType !== JobType.PRODUCTION) {
         // Special Job Types: Single continuous row
         const block = jobBlocks[0];
-        if (block && woStartLog) {
+        if (block && segmentStartLog) {
             rows.push({
                 rowId: `job-block-${segment.woId}`,
-                logId: woStartLog.log_id,
-                logTime: new Date(woStartLog.log_time), // Start at WO Start
+                logId: segmentStartLog.log_id,
+                logTime: new Date(segmentStartLog.log_time),
                 action: "", // No specific action like SPINDLE_ON
                 label: block.label,
                 durationText: formatDuration(block.totalSec),
@@ -125,8 +127,8 @@ export function injectComputedRows(
                 jobType: segment.jobType,
                 isJobBlock: true,
                 jobBlockLabel: block.label, // boxes the whole thing
-                originalLog: woStartLog,
-                timestamp: new Date(woStartLog.log_time).getTime() + 100, // slightly after start
+                originalLog: segmentStartLog,
+                timestamp: new Date(segmentStartLog.log_time).getTime() + 100,
                 operatorName: operator,
                 woSpecs,
             });
@@ -144,7 +146,8 @@ export function injectComputedRows(
 
                 rows.push({
                     rowId: `estimated-job-${segment.woId}-${bIdx}`,
-                    logId: woStartLog?.log_id ?? 0,
+                    // No logId — ESTIMATED rows are computed, not real log events.
+                    // Omitting logId means no S.No appears in the export.
                     logTime: new Date(refTime + (bIdx * 100)),
                     action: "",
                     label: block.label,
@@ -156,6 +159,10 @@ export function injectComputedRows(
                     isEstimated: true,
                     jobBlockLabel: block.label,
                     timestamp: refTime + 1000 + (bIdx * 100),
+                    // Use woStartLog as originalLog so export-utils resolves
+                    // OP from originalLog.start_name (the real on-day operator)
+                    // rather than woDetails.start_name (the DB-registered name).
+                    ...(woStartLog ? { originalLog: woStartLog } : {}),
                     operatorName: operator,
                     woSpecs,
                 });

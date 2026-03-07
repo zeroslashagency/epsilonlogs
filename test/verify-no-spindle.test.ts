@@ -101,3 +101,74 @@ test("MTR_ON / MTR_OFF should create a Maintenance segment", () => {
     expect(jobRows.length).toBe(1);
     expect(jobRows[0]!.label).toContain("MAINTENANCE PROCESS");
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// REGRESSION: ESTIMATED row operator + S.No bug
+// woDetails.start_name (DB-registered) vs WO_START log's start_name (on-day)
+// ────────────────────────────────────────────────────────────────────────────
+
+function makeEstimatedScenario() {
+    // Same WO created by RamaKrishnan in DB, but PRADEEP RAJ operated the machine
+    const logs: DeviceLogEntry[] = [
+        {
+            log_id: 9461,
+            log_time: "2026-03-03T08:47:43Z",
+            action: "WO_START",
+            wo_id: 415,
+            device_id: 15,
+            job_type: 1,
+            start_name: "PRADEEP RAJ",
+        } as DeviceLogEntry,
+        {
+            log_id: 9466,
+            log_time: "2026-03-03T16:12:53Z",
+            action: "WO_STOP",
+            wo_id: 415,
+            device_id: 15,
+        } as DeviceLogEntry,
+    ];
+    const woDetails = new Map<number, WoDetails>();
+    woDetails.set(415, {
+        id: 415, wo_id_str: "2426", part_no: "LH044",
+        pcl: 1200,
+        start_time: "2026-03-03T08:47:43Z", end_time: "2026-03-03T16:12:53Z",
+        duration: 26830, alloted_qty: 152, ok_qty: 152, reject_qty: 0,
+        device_id: 15, setting: "SETTING -1",
+        start_name: "RamaKrishnan",  // DB name — should NOT appear on ESTIMATED rows
+        stop_name: "RamaKrishnan",
+        start_comment: "Start", stop_comment: "Shift complete",
+        extensions: [], start_uid: 12, stop_uid: 12,
+    });
+    return { logs, woDetails };
+}
+
+test("ESTIMATED rows resolve OP from WO_START log, not woDetails.start_name", () => {
+    const { logs, woDetails } = makeEstimatedScenario();
+    const report = buildReport(logs, woDetails, config);
+
+    const estimated = report.rows.filter(r => r.isEstimated);
+    expect(estimated.length).toBeGreaterThan(0);
+
+    for (const row of estimated) {
+        // export-utils resolves OP as: originalLog.start_name || row.operatorName
+        const resolvedOp = row.originalLog?.start_name || row.operatorName;
+        expect(resolvedOp).toBe("PRADEEP RAJ");
+        expect(resolvedOp).not.toBe("RamaKrishnan");
+    }
+});
+
+test("ESTIMATED rows have no logId so S.No is blank in the export", () => {
+    const { logs, woDetails } = makeEstimatedScenario();
+    const report = buildReport(logs, woDetails, config);
+
+    const estimated = report.rows.filter(r => r.isEstimated);
+    expect(estimated.length).toBeGreaterThan(0);
+
+    for (const row of estimated) {
+        expect(row.logId).toBeUndefined();
+    }
+
+    // WO_START row must still carry its real logId
+    const woStartRow = report.rows.find(r => r.action === "WO_START");
+    expect(woStartRow?.logId).toBe(9461);
+});

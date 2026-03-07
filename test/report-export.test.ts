@@ -115,6 +115,37 @@ const makeEventRow = (overrides: Partial<ReportRow> = {}): ReportRow => {
   };
 };
 
+const makeJobBlockRow = (
+  jobType: ReportRow['jobType'],
+  jobTypeCode: number,
+  overrides: Partial<ReportRow> = {},
+): ReportRow => {
+  const logTime = new Date('2026-02-09T05:35:11.192Z');
+  const label = `${String(jobType).toUpperCase()} PROCESS`;
+
+  return {
+    rowId: `job-block-${jobTypeCode}`,
+    logId: 7000 + jobTypeCode,
+    logTime,
+    action: '',
+    label,
+    durationText: '15 min 0 sec',
+    durationSec: 900,
+    jobType,
+    operatorName: 'RamaKrishnan',
+    timestamp: logTime.getTime(),
+    isJobBlock: true,
+    jobBlockLabel: label,
+    originalLog: {
+      ...makeEventRow().originalLog!,
+      log_id: 7000 + jobTypeCode,
+      action: 'WO_START',
+      job_type: String(jobTypeCode),
+    },
+    ...overrides,
+  };
+};
+
 describe('report export mapping', () => {
   it('keeps exact log header order', () => {
     expect(LOG_SHEET_HEADERS).toEqual([
@@ -722,6 +753,37 @@ describe('grouped workbook structure', () => {
     expect(bottomBorder?.style).toBe('thick');
   });
 
+  it.each([
+    [2, 'Setting'],
+    [3, 'Calibration'],
+    [4, 'Maintenance'],
+    [5, 'Man'],
+    [6, 'Training'],
+    [7, 'RD'],
+    [1, 'Production'],
+  ])('JOB column shows clean label (no numeric prefix) for job type %i → "%s"', async (jobTypeCode, expectedLabel) => {
+    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails({ job_type: jobTypeCode })]]);
+
+    const jobBlock = makeJobBlockRow(expectedLabel as ReportRow['jobType'], jobTypeCode);
+
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [jobBlock],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap: new Map(),
+    });
+
+    const sheet = workbook.getWorksheet('Logs Grouped');
+    // First data row (row 2) is the START row; G column = JOB
+    const jobCellStart = String(sheet?.getCell('G2').value ?? '');
+    const jobCellEnd = String(sheet?.getCell('G3').value ?? '');
+
+    // Must be the clean label — no "1: " or "2: " prefix
+    expect(jobCellStart).toBe(expectedLabel);
+    expect(jobCellEnd).toBe(expectedLabel);
+    expect(jobCellStart).not.toMatch(/^\d+:\s/);
+  });
+
   it('includes comments for WO_START, WO_PAUSE, WO_RESUME and WO_STOP in grouped export', async () => {
     const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails({
       start_comment: 'Machine starting',
@@ -929,6 +991,84 @@ describe('grouped workbook structure', () => {
     expect(groupedSheet?.getCell('D3').value).toBe('Calibration OFF');
     expect(groupedSheet?.getCell('H2').value).toBe('Total Spindle Run Time:');
     expect(groupedSheet?.getCell('H3').value).toBe('7m 19s');
+  });
+
+  it.each([
+    [7, 'RD'],
+    [51, 'Man Production'],
+    [52, 'Man Setting'],
+  ] as const)('maps key action labels for job type %s', async (jobTypeCode, expectedLabel) => {
+    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails({ job_type: jobTypeCode })]]);
+    const keyOn = makeEventRow({
+      rowId: `log-${jobTypeCode}-on`,
+      logId: 6100 + jobTypeCode,
+      action: 'KEY_ON',
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 6100 + jobTypeCode,
+        action: 'KEY_ON',
+        job_type: String(jobTypeCode),
+      },
+    });
+    const keyOff = makeEventRow({
+      rowId: `log-${jobTypeCode}-off`,
+      logId: 6200 + jobTypeCode,
+      action: 'KEY_OFF',
+      timestamp: new Date('2026-02-13T20:19:00').getTime(),
+      logTime: new Date('2026-02-13T20:19:00'),
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 6200 + jobTypeCode,
+        action: 'KEY_OFF',
+        job_type: String(jobTypeCode),
+      },
+    });
+
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [keyOn, keyOff],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap: new Map<number, string>([[15, 'VMC - 05']]),
+    });
+
+    const groupedSheet = workbook.getWorksheet('Logs Grouped');
+    expect(groupedSheet?.getCell('D2').value).toBe(`${expectedLabel} ON`);
+    expect(groupedSheet?.getCell('D3').value).toBe(`${expectedLabel} OFF`);
+  });
+
+  it.each([
+    ['Setting', 2, LOG_STYLE_COLORS.groupedPurple],
+    ['Calibration', 3, LOG_STYLE_COLORS.groupedCyan],
+    ['Maintenance', 4, LOG_STYLE_COLORS.groupedOrange],
+    ['Man', 5, LOG_STYLE_COLORS.groupedBeige],
+    ['Training', 6, LOG_STYLE_COLORS.groupedLime],
+    ['RD', 7, LOG_STYLE_COLORS.groupedFuchsia],
+    ['Man Production', 51, LOG_STYLE_COLORS.groupedMint],
+    ['Man Setting', 52, LOG_STYLE_COLORS.groupedLavender],
+  ] as const)('applies grouped job block fill for %s', async (jobType, jobTypeCode, expectedFill) => {
+    const woDetailsMap = new Map<number, WoDetails>([[
+      303,
+      makeWoDetails({
+        job_type: jobTypeCode,
+        stop_comment: `${jobType} done`,
+      }),
+    ]]);
+
+    const workbook = await buildGroupedExcelWorkbook({
+      rows: [makeJobBlockRow(jobType, jobTypeCode)],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap: new Map<number, string>([[15, 'VMC - 05']]),
+    });
+
+    const groupedSheet = workbook.getWorksheet('Logs Grouped');
+    const startFill = groupedSheet?.getCell('D2').fill as { fgColor?: { argb?: string } };
+    const endFill = groupedSheet?.getCell('H3').fill as { fgColor?: { argb?: string } };
+
+    expect(groupedSheet?.getCell('G2').value).toBe(`${jobTypeCode}: ${jobType}`);
+    expect(groupedSheet?.getCell('G3').value).toBe(`${jobTypeCode}: ${jobType}`);
+    expect(startFill?.fgColor?.argb).toBe(expectedFill);
+    expect(endFill?.fgColor?.argb).toBe(expectedFill);
   });
 
   it('backfills OP for KEY rows from previous operator when missing', async () => {

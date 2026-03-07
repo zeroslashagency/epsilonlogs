@@ -88,6 +88,38 @@ export enum JobType {
     MAN = 5,
     TRAINING = 6,
     RD = 7,
+    MAN_PROD = 51,
+    MAN_SETTING = 52,
+}
+
+export type SegmentJobType =
+    | "Production"
+    | "Unknown"
+    | "Setting"
+    | "Calibration"
+    | "Maintenance"
+    | "Man"
+    | "Training"
+    | "RD"
+    | "Man Production"
+    | "Man Setting"
+    | "Other";
+
+export type ReportJobType = SegmentJobType | "Manual Input";
+
+export function mapRawJobTypeToLabel(typeId: number): SegmentJobType {
+    switch (typeId) {
+        case JobType.PRODUCTION: return "Production";
+        case JobType.SETTING: return "Setting";
+        case JobType.CALIBRATION: return "Calibration";
+        case JobType.MAINTENANCE: return "Maintenance";
+        case JobType.MAN: return "Man";
+        case JobType.TRAINING: return "Training";
+        case JobType.RD: return "RD";
+        case JobType.MAN_PROD: return "Man Production";
+        case JobType.MAN_SETTING: return "Man Setting";
+        default: return "Other";
+    }
 }
 
 export interface SpindleCycle {
@@ -107,7 +139,7 @@ export interface WoSegment {
     logs: DeviceLogEntry[];
     spindleCycles: SpindleCycle[];
     pausePeriods: PausePeriod[];
-    jobType: "Production" | "Unknown" | "Setting" | "Calibration" | "Maintenance" | "Other";
+    jobType: SegmentJobType;
     rawJobType?: number;
 }
 
@@ -174,7 +206,7 @@ export interface ReportRow {
     durationSec?: number | undefined;
     label?: string | undefined;
     summary?: string | undefined;
-    jobType: "Production" | "Unknown" | "Manual Input" | "Setting" | "Calibration" | "Maintenance" | "Other";
+    jobType: ReportJobType;
     operatorName?: string;
     classification?: "GOOD" | "WARNING" | "BAD" | "UNKNOWN";
     reasonCode?: string;

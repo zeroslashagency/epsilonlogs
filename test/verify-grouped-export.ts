@@ -47,7 +47,7 @@ const row1 = results[0].row;
 console.log("- Row 1 (Start) Action:", row1.Action);
 assert.strictEqual(row1.Action, "SETTING START");
 assert.strictEqual(row1.TIME, "");
-assert.strictEqual(row1.JOB, "2: Setting");
+assert.strictEqual(row1.JOB, "Setting");
 assert.strictEqual(results[0].style, "jobBlock", "Row 1 should have jobBlock style");
 
 // Verify Row 2: END
@@ -55,7 +55,7 @@ const row2 = results[1].row;
 console.log("- Row 2 (End) Action:", row2.Action);
 assert.strictEqual(row2.Action, "SETTING END");
 assert.strictEqual(row2.TIME, "15 min 0 sec");
-assert.strictEqual(row2.JOB, "2: Setting");
+assert.strictEqual(row2.JOB, "Setting");
 assert.strictEqual(results[1].style, "jobBlock", "Row 2 should have jobBlock style");
 
 console.log("✅ Passed");

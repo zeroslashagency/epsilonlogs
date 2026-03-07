@@ -1,16 +1,8 @@
-import { DeviceLogEntry, JobType, WoSegment } from "./report-types";
+import { DeviceLogEntry, JobType, WoSegment, mapRawJobTypeToLabel } from "./report-types";
 
-/**
- * Helper to map raw job type ID to string label.
- */
-function mapJobType(typeId: number): WoSegment["jobType"] {
-    switch (typeId) {
-        case JobType.PRODUCTION: return "Production";
-        case JobType.SETTING: return "Setting";
-        case JobType.CALIBRATION: return "Calibration";
-        case JobType.MAINTENANCE: return "Maintenance";
-        default: return "Other";
-    }
+function parsePositiveJobType(log: DeviceLogEntry): number | null {
+    const parsedType = log.job_type != null ? parseInt(String(log.job_type), 10) : NaN;
+    return Number.isFinite(parsedType) && parsedType > 0 ? parsedType : null;
 }
 
 /**
@@ -28,16 +20,14 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
                 segments.push(activeSegment);
                 activeSegment = null;
             }
-            // Parse job_type from log (API may return string or number)
-            const parsedType = log.job_type != null ? parseInt(String(log.job_type), 10) : NaN;
-            const rawType = Number.isFinite(parsedType) && parsedType > 0 ? parsedType : JobType.PRODUCTION;
+            const rawType = parsePositiveJobType(log) ?? JobType.PRODUCTION;
 
             activeSegment = {
                 woId: log.wo_id,
                 logs: [log],
                 spindleCycles: [],
                 pausePeriods: [],
-                jobType: mapJobType(rawType),
+                jobType: mapRawJobTypeToLabel(rawType),
                 rawJobType: rawType,
             };
         } else if (log.action === "WO_STOP") {
@@ -62,7 +52,7 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
                 logs: [log],
                 spindleCycles: [],
                 pausePeriods: [],
-                jobType: mapJobType(mtrRawType),
+                jobType: mapRawJobTypeToLabel(mtrRawType),
                 rawJobType: mtrRawType,
             };
         } else if (log.action === "MTR_OFF") {
@@ -76,6 +66,11 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
             }
         } else {
             if (activeSegment && activeSegment.woId === log.wo_id) {
+                const logJobType = parsePositiveJobType(log);
+                if (logJobType != null && (activeSegment.rawJobType == null || activeSegment.rawJobType === JobType.PRODUCTION)) {
+                    activeSegment.rawJobType = logJobType;
+                    activeSegment.jobType = mapRawJobTypeToLabel(logJobType);
+                }
                 activeSegment.logs.push(log);
             } else {
                 unassignedLogs.push(log);
@@ -97,11 +92,9 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
             byWo.set(woId, list);
         }
         for (const [woId, woLogs] of byWo) {
-            const hasSpindle = woLogs.some(l =>
-                l.action === "SPINDLE_ON" || l.action === "SPINDLE_OFF"
-            );
-            // Fallback assumes Production if spindle activity exists
-            const fallbackType = woId && hasSpindle ? JobType.PRODUCTION : JobType.PRODUCTION;
+            const fallbackType = woLogs
+                .map(parsePositiveJobType)
+                .find((typeId): typeId is number => typeId != null) ?? JobType.PRODUCTION;
 
             segments.push({
                 woId,
@@ -110,7 +103,7 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
                 ),
                 spindleCycles: [],
                 pausePeriods: [],
-                jobType: mapJobType(fallbackType),
+                jobType: mapRawJobTypeToLabel(fallbackType),
                 rawJobType: fallbackType,
             });
         }

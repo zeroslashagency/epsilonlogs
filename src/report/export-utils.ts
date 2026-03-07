@@ -55,6 +55,11 @@ export const LOG_STYLE_COLORS = {
     groupedBeige: 'FFE8D695',
     groupedLightBlue: 'FFBDD7EE',
     groupedOrange: 'FFF4B183',
+    groupedCyan: 'FFD9F0FF',
+    groupedLime: 'FFE2F0D9',
+    groupedFuchsia: 'FFF4D6F7',
+    groupedMint: 'FFD9F2E6',
+    groupedLavender: 'FFE9D5FF',
     groupedOutline: 'FF22C55E',
     groupedSummaryBg: 'FF1E3A8A',
     groupedPurple: 'FFE6D0FF', // Light Purple
@@ -154,6 +159,8 @@ type GroupedRowStyle = 'default' | 'yellowAction' | 'spindlePair' | 'keyPair' | 
 interface GroupedExportRow {
     row: GroupedLogsSheetRow;
     style: GroupedRowStyle;
+    jobType?: ReportRow['jobType'];
+    woId?: string;
     pairId?: string;
     mergePlc?: boolean;
     mergeJob?: boolean;
@@ -1039,8 +1046,24 @@ function resolveGroupedKeyActionLabel(row: ReportRow, woDetailsMap: Map<number, 
     if (code === 4) return `Maintenance ${suffix}`;
     if (code === 5) return `Man ${suffix}`;
     if (code === 6) return `Training ${suffix}`;
+    if (code === 7) return `RD ${suffix}`;
+    if (code === 51) return `Man Production ${suffix}`;
+    if (code === 52) return `Man Setting ${suffix}`;
 
     return `KEY_${suffix}`;
+}
+
+export function resolveGroupedJobBlockFillColor(jobType: ReportRow['jobType']): string {
+    if (jobType === 'Production') return LOG_STYLE_COLORS.groupedGreen;
+    if (jobType === 'Setting') return LOG_STYLE_COLORS.groupedPurple;
+    if (jobType === 'Calibration') return LOG_STYLE_COLORS.groupedCyan;
+    if (jobType === 'Maintenance') return LOG_STYLE_COLORS.groupedOrange;
+    if (jobType === 'Man') return LOG_STYLE_COLORS.groupedBeige;
+    if (jobType === 'Training') return LOG_STYLE_COLORS.groupedLime;
+    if (jobType === 'RD') return LOG_STYLE_COLORS.groupedFuchsia;
+    if (jobType === 'Man Production') return LOG_STYLE_COLORS.groupedMint;
+    if (jobType === 'Man Setting') return LOG_STYLE_COLORS.groupedLavender;
+    return LOG_STYLE_COLORS.groupedPurple;
 }
 
 function formatSecondsToJobLoadingText(seconds: number): string {
@@ -1175,12 +1198,10 @@ export function buildGroupedExportRows(
         if (row.isJobBlock && !row.action) {
             const serial = typeof row.logId === 'number' ? serialNo++ : '';
             const woDetails = resolveWoDetails(row, woDetailsMap);
-            // Construct "2: Setting" if possible, else just "Setting"
-            const jobTypeId = woDetails?.job_type ? `${woDetails.job_type}: ` : '';
             const jobTypeLabel = row.jobType || '';
 
             const jobName = (row.label || 'PROCESS').toUpperCase().replace(' PROCESS', '');
-            const jobColumnText = `${jobTypeId}${jobTypeLabel}`;
+            const jobColumnText = jobTypeLabel;
 
             // Row 1: START
             const startBase = buildGroupedBaseRow(row, serial, woDetailsMap);
@@ -1195,6 +1216,8 @@ export function buildGroupedExportRows(
             exportRows.push({
                 row: startBase,
                 style: 'jobBlock',
+                jobType: row.jobType,
+                woId: woDetails?.wo_id_str || row.woSpecs?.woId || '',
                 jobGroupKey: row.jobBlockLabel || null,
                 pairId
             });
@@ -1212,6 +1235,8 @@ export function buildGroupedExportRows(
             exportRows.push({
                 row: endBase,
                 style: 'jobBlock',
+                jobType: row.jobType,
+                woId: woDetails?.wo_id_str || row.woSpecs?.woId || '',
                 jobGroupKey: row.jobBlockLabel || null,
                 pairId
             });
@@ -1697,12 +1722,13 @@ function applyGroupedDataRowStyle(row: Row, exportRow: GroupedExportRow): void {
     }
 
     if (exportRow.style === 'jobBlock') {
+        const fillColor = resolveGroupedJobBlockFillColor(exportRow.jobType || 'Other');
         for (const col of [4, 5, 6, 7, 8]) {
             const cell = row.getCell(col);
             cell.fill = {
                 type: 'pattern',
                 pattern: 'solid',
-                fgColor: { argb: LOG_STYLE_COLORS.groupedPurple },
+                fgColor: { argb: fillColor },
             };
         }
     }
