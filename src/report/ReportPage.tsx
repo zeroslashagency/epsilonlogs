@@ -1,4 +1,5 @@
 import React, { useRef, useState, useMemo } from "react";
+import { ThemeToggle } from "../components/ThemeToggle";
 import BoxLoadingPreloader from "../components/ui/BoxLoadingPreloader";
 import DotMatrixEmptyState from "../components/ui/DotMatrixEmptyState";
 import {
@@ -217,10 +218,10 @@ export default function ReportPage() {
   };
 
   return (
-    <div className="min-h-screen bg-premium-page p-6 space-y-5">
+    <div className="min-h-screen bg-premium-page p-6 space-y-5 dark:text-slate-100">
       {/* ── Page Header ── */}
       <header
-        className="flex items-center justify-between px-5 py-4 bg-white rounded-2xl border border-slate-200/80"
+        className="flex items-center justify-between px-5 py-4 bg-white rounded-2xl border border-slate-200/80 dark:bg-slate-800 dark:border-slate-700"
         style={{
           boxShadow: "0 2px 12px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04)",
         }}
@@ -252,17 +253,18 @@ export default function ReportPage() {
             <Monitor className="h-3.5 w-3.5" />
             Machine #{config.deviceId}
           </span>
+          <ThemeToggle />
         </div>
       </header>
 
       {/* ── Controls Panel ── */}
       <div
-        className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden"
+        className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden dark:bg-slate-800 dark:border-slate-700"
         style={{
           boxShadow: "0 2px 12px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.04)",
         }}
       >
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2 dark:border-slate-700">
           <div className="p-1.5 rounded-lg bg-indigo-50">
             <SlidersHorizontal className="h-3.5 w-3.5 text-indigo-600" />
           </div>
