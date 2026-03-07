@@ -14,13 +14,12 @@ import {
   Loader2,
   BarChart3,
   Zap,
-  Search,
-  X,
   Clock,
   CheckCircle2,
   Circle,
   AlertTriangle,
   Monitor,
+  SlidersHorizontal,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ReportTable } from "./ReportTable";
@@ -40,6 +39,13 @@ import { extractWoIds } from "./log-normalizer";
 import { formatDuration } from "./format-utils";
 import { DateRangePicker } from "../components/ui/DateRangePicker";
 import { matchRow } from "./search-utils";
+import {
+  ReportFilterBar,
+  ReportFilters,
+  EMPTY_FILTERS,
+  extractFilterOptions,
+  applyFilters,
+} from "./ReportFilterBar";
 
 const TOKEN = import.meta.env.VITE_API_TOKEN;
 
@@ -113,6 +119,8 @@ export default function ReportPage() {
   const [error, setError] = useState<string | null>(null);
   const [exportingGroupedExcel, setExportingGroupedExcel] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [reportFilters, setReportFilters] =
+    useState<ReportFilters>(EMPTY_FILTERS);
   const reportExportRef = useRef<HTMLDivElement | null>(null);
 
   // ── Selection summary (live, derived from config dates) ───────────────────
@@ -145,11 +153,20 @@ export default function ReportPage() {
     selectionSummary !== null &&
     !selectionSummary.isInvalid;
 
-  // Filter rows based on search query
-  const filteredRows = React.useMemo(() => {
-    if (!searchQuery.trim()) return rows;
-    return rows.filter((row) => matchRow(row, searchQuery));
-  }, [rows, searchQuery]);
+  // Derive available filter options from raw rows
+  const filterOptions = useMemo(() => extractFilterOptions(rows), [rows]);
+
+  // Filter rows based on search query + active filters
+  const filteredRows = useMemo(() => {
+    let result = rows;
+    if (searchQuery.trim())
+      result = result.filter((row) => matchRow(row, searchQuery));
+    result = applyFilters(result, reportFilters);
+    return result;
+  }, [rows, searchQuery, reportFilters]);
+
+  // Reset filters when new data is loaded
+  const handleFilterChange = (f: ReportFilters) => setReportFilters(f);
 
   const handleGenerate = async () => {
     if (!config.startDate || !config.endDate) {
@@ -164,6 +181,8 @@ export default function ReportPage() {
     setStats(null);
     setWoDetailsMap(new Map());
     setDeviceNameMap(new Map());
+    setReportFilters(EMPTY_FILTERS);
+    setSearchQuery("");
 
     try {
       const logs = await fetchDeviceLogs(config, TOKEN);
@@ -198,34 +217,64 @@ export default function ReportPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50/50 p-6 space-y-6">
-      <header className="flex items-center justify-between pb-4 border-b bg-white p-4 rounded-xl shadow-sm">
-        <div className="flex items-center gap-4">
+    <div className="min-h-screen bg-premium-page p-6 space-y-5">
+      {/* ── Page Header ── */}
+      <header
+        className="flex items-center justify-between px-5 py-4 bg-white rounded-2xl border border-slate-200/80"
+        style={{
+          boxShadow: "0 2px 12px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04)",
+        }}
+      >
+        <div className="flex items-center gap-3">
           <Link
             to="/"
-            className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-500"
+            className="p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-500 hover:text-slate-700"
           >
             <ArrowLeft className="h-5 w-5" />
           </Link>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-              <FileText className="h-6 w-6 text-indigo-600" />
-              Device Logs Report
-            </h1>
-            <p className="text-sm text-slate-500">
-              Generate Job Block analysis from raw device logs
-            </p>
+          <div className="w-px h-8 bg-slate-200" />
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-100">
+              <FileText className="h-5 w-5 text-indigo-600" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-slate-900 leading-tight">
+                Device Logs Report
+              </h1>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Job Block analysis from raw device logs
+              </p>
+            </div>
           </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-slate-500 text-xs font-medium border border-slate-200">
+            <Monitor className="h-3.5 w-3.5" />
+            Machine #{config.deviceId}
+          </span>
         </div>
       </header>
 
-      {/* Controls */}
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+      {/* ── Controls Panel ── */}
+      <div
+        className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden"
+        style={{
+          boxShadow: "0 2px 12px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.04)",
+        }}
+      >
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+          <div className="p-1.5 rounded-lg bg-indigo-50">
+            <SlidersHorizontal className="h-3.5 w-3.5 text-indigo-600" />
+          </div>
+          <span className="text-sm font-semibold text-slate-700">
+            Query Settings
+          </span>
+        </div>
         <div className="p-5 space-y-4">
           {/* Row 1 — Device ID + Date Range */}
           <div className="flex flex-wrap gap-4 items-end">
             <div className="w-36 shrink-0">
-              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5">
                 Device ID
               </label>
               <input
@@ -237,7 +286,7 @@ export default function ReportPage() {
                     deviceId: parseInt(e.target.value) || 0,
                   })
                 }
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-400 outline-none text-sm text-slate-800 font-medium"
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400 outline-none text-sm text-slate-800 font-semibold bg-slate-50/60 transition-all"
               />
             </div>
 
@@ -313,7 +362,7 @@ export default function ReportPage() {
             </div>
           )}
 
-          {/* Row 3 — Checklist + Search + Generate */}
+          {/* Row 3 — Checklist + Generate */}
           <div className="flex flex-wrap items-center gap-3 pt-1">
             {/* Checklist */}
             <div className="flex items-center gap-4">
@@ -325,32 +374,10 @@ export default function ReportPage() {
             {/* Spacer */}
             <div className="flex-1" />
 
-            {/* Search */}
-            <div className="relative w-52">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Search className="h-4 w-4 text-slate-400" />
-              </div>
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search results…"
-                className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery("")}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-
             {/* Generate button with ready-pulse ring */}
             <div className="relative">
               {allReady && !loading && (
-                <span className="absolute inset-0 rounded-lg ring-2 ring-indigo-400 ring-offset-1 animate-pulse pointer-events-none" />
+                <span className="absolute inset-0 rounded-xl ring-2 ring-indigo-400 ring-offset-1 animate-pulse pointer-events-none" />
               )}
               <button
                 onClick={handleGenerate}
@@ -360,10 +387,15 @@ export default function ReportPage() {
                   !config.endDate ||
                   selectionSummary?.isInvalid === true
                 }
-                className="relative flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition-colors font-medium text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                className="relative flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-2.5 rounded-xl hover:bg-indigo-700 active:bg-indigo-800 transition-all font-semibold text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ boxShadow: "0 2px 8px rgba(99,102,241,0.35)" }}
               >
-                <Play className="h-4 w-4" />
-                Generate Report
+                {loading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Play className="h-4 w-4" />
+                )}
+                {loading ? "Generating…" : "Generate Report"}
               </button>
             </div>
           </div>
@@ -371,9 +403,9 @@ export default function ReportPage() {
 
         {/* Error bar */}
         {error && (
-          <div className="px-5 py-3 bg-red-50 border-t border-red-100 text-red-600 text-sm flex items-start gap-2">
-            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-            {error}
+          <div className="px-5 py-3 bg-red-50 border-t border-red-200 text-red-600 text-sm flex items-start gap-2 animate-fade-in-down">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-red-500" />
+            <span className="font-medium">{error}</span>
           </div>
         )}
       </div>
@@ -400,14 +432,19 @@ export default function ReportPage() {
         )}
 
         {stats && (
-          <div className="space-y-5">
+          <div className="space-y-5 animate-fade-in-up">
             {/* Section Header + Export Buttons */}
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
-                <BarChart3 className="h-5 w-5 text-indigo-600" />
+              <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-indigo-50">
+                  <BarChart3 className="h-4 w-4 text-indigo-600" />
+                </div>
                 Results Analysis
+                <span className="ml-1 px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-semibold">
+                  {filteredRows.length.toLocaleString()} rows
+                </span>
               </h2>
-              <div className="flex items-center gap-3" data-pdf-exclude="true">
+              <div className="flex items-center gap-2" data-pdf-exclude="true">
                 <button
                   onClick={async () => {
                     try {
@@ -428,7 +465,8 @@ export default function ReportPage() {
                       setError(message);
                     }
                   }}
-                  className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium"
+                  className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-xl hover:bg-emerald-700 active:bg-emerald-800 transition-all text-sm font-semibold"
+                  style={{ boxShadow: "0 1px 4px rgba(5,150,105,0.3)" }}
                 >
                   <Download className="h-4 w-4" />
                   Export Excel
@@ -458,7 +496,8 @@ export default function ReportPage() {
                     }
                   }}
                   disabled={exportingGroupedExcel}
-                  className="flex items-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded-lg hover:bg-cyan-700 transition-colors text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 bg-cyan-600 text-white px-4 py-2 rounded-xl hover:bg-cyan-700 active:bg-cyan-800 transition-all text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                  style={{ boxShadow: "0 1px 4px rgba(8,145,178,0.3)" }}
                 >
                   {exportingGroupedExcel ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -487,7 +526,8 @@ export default function ReportPage() {
                       setError(message);
                     }
                   }}
-                  className="flex items-center gap-2 bg-rose-600 text-white px-4 py-2 rounded-lg hover:bg-rose-700 transition-colors text-sm font-medium"
+                  className="flex items-center gap-2 bg-rose-600 text-white px-4 py-2 rounded-xl hover:bg-rose-700 active:bg-rose-800 transition-all text-sm font-semibold"
+                  style={{ boxShadow: "0 1px 4px rgba(225,29,72,0.3)" }}
                 >
                   <Download className="h-4 w-4" />
                   Export PDF
@@ -495,7 +535,7 @@ export default function ReportPage() {
               </div>
             </div>
 
-            {/* Panel A: KPI Cards — Row 1 */}
+            {/* Panel A: KPI Cards */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
               <KpiCard
                 icon={<FileText className="h-4 w-4" />}
@@ -537,38 +577,41 @@ export default function ReportPage() {
             </div>
 
             {/* Panel B: Production Quality */}
-            <div className="bg-white rounded-xl border shadow-sm p-4">
-              <h3 className="text-sm font-semibold text-slate-600 mb-3 flex items-center gap-2">
-                <Package className="h-4 w-4 text-slate-500" />
+            <div
+              className="bg-white rounded-2xl border border-slate-200/80 p-4"
+              style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}
+            >
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                <Package className="h-3.5 w-3.5 text-slate-400" />
                 Production Quality
               </h3>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="text-center p-3 bg-blue-50 rounded-lg border border-blue-100">
-                  <div className="text-xs text-blue-500 font-medium uppercase tracking-wide">
-                    Allotted Qty
+              <div className="grid grid-cols-3 gap-3">
+                <div className="text-center p-3 bg-blue-50 rounded-xl border border-blue-100">
+                  <div className="text-[10px] text-blue-400 font-bold uppercase tracking-widest">
+                    Allotted
                   </div>
-                  <div className="text-2xl font-bold text-blue-700 mt-1">
+                  <div className="text-2xl font-bold text-blue-700 mt-1 tabular-nums">
                     {stats.totalAllotedQty}
                   </div>
                 </div>
-                <div className="text-center p-3 bg-emerald-50 rounded-lg border border-emerald-100">
-                  <div className="text-xs text-emerald-500 font-medium uppercase tracking-wide">
+                <div className="text-center p-3 bg-emerald-50 rounded-xl border border-emerald-100">
+                  <div className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">
                     OK Qty
                   </div>
-                  <div className="text-2xl font-bold text-emerald-700 mt-1">
+                  <div className="text-2xl font-bold text-emerald-700 mt-1 tabular-nums">
                     {stats.totalOkQty}
                   </div>
                 </div>
                 <div
-                  className={`text-center p-3 rounded-lg border ${stats.totalRejectQty > 0 ? "bg-red-50 border-red-200" : "bg-slate-50 border-slate-200"}`}
+                  className={`text-center p-3 rounded-xl border ${stats.totalRejectQty > 0 ? "bg-rose-50 border-rose-200" : "bg-slate-50 border-slate-200"}`}
                 >
                   <div
-                    className={`text-xs font-medium uppercase tracking-wide ${stats.totalRejectQty > 0 ? "text-red-500" : "text-slate-500"}`}
+                    className={`text-[10px] font-bold uppercase tracking-widest ${stats.totalRejectQty > 0 ? "text-rose-500" : "text-slate-400"}`}
                   >
-                    Reject Qty
+                    Rejects
                   </div>
                   <div
-                    className={`text-2xl font-bold mt-1 ${stats.totalRejectQty > 0 ? "text-red-700" : "text-slate-700"}`}
+                    className={`text-2xl font-bold mt-1 tabular-nums ${stats.totalRejectQty > 0 ? "text-rose-700" : "text-slate-500"}`}
                   >
                     {stats.totalRejectQty}
                   </div>
@@ -578,112 +621,107 @@ export default function ReportPage() {
 
             {/* Panel C: WO Breakdown Table */}
             {stats.woBreakdowns.length > 0 && (
-              <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b bg-slate-50">
-                  <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-indigo-500" />
+              <div
+                className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden"
+                style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}
+              >
+                <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/80">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                    <FileText className="h-3.5 w-3.5 text-indigo-400" />
                     Work Order Breakdown
                   </h3>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="min-w-full text-xs">
+                  <table className="min-w-full text-xs border-collapse">
                     <thead>
-                      <tr className="bg-slate-100 text-slate-600">
-                        <th className="px-3 py-2 text-left font-semibold">
-                          WO ID
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Part No
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Operator
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Job Type
-                        </th>
-                        <th className="px-3 py-2 text-center font-semibold">
-                          Jobs
-                        </th>
-                        <th className="px-3 py-2 text-center font-semibold">
-                          Cycles
-                        </th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Cutting
-                        </th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Pause
-                        </th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Loading
-                        </th>
-                        <th className="px-3 py-2 text-center font-semibold">
-                          PCL
-                        </th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Avg Cycle
-                        </th>
-                        <th className="px-3 py-2 text-center font-semibold">
-                          Allot
-                        </th>
-                        <th className="px-3 py-2 text-center font-semibold">
-                          OK
-                        </th>
-                        <th className="px-3 py-2 text-center font-semibold">
-                          Reject
-                        </th>
+                      <tr
+                        style={{
+                          background:
+                            "linear-gradient(180deg,#1e293b 0%,#0f172a 100%)",
+                        }}
+                      >
+                        {[
+                          "WO ID",
+                          "Part No",
+                          "Operator",
+                          "Job Type",
+                          "Jobs",
+                          "Cycles",
+                          "Cutting",
+                          "Pause",
+                          "Loading",
+                          "PCL",
+                          "Avg Cycle",
+                          "Allot",
+                          "OK",
+                          "Reject",
+                        ].map((h) => (
+                          <th
+                            key={h}
+                            className="px-3 py-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400 whitespace-nowrap text-left"
+                          >
+                            {h}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
                       {stats.woBreakdowns.map((wo, i) => (
                         <tr
                           key={wo.woId}
-                          className={
-                            i % 2 === 0 ? "bg-white" : "bg-slate-50/50"
-                          }
+                          className="border-b border-slate-100 last:border-0 hover:bg-indigo-50/20 transition-colors"
                         >
-                          <td className="px-3 py-2 font-semibold text-indigo-700">
-                            {wo.woId}
+                          <td className="px-3 py-2 font-bold text-indigo-600 font-mono text-[11px]">
+                            #{wo.woId}
                           </td>
-                          <td className="px-3 py-2 text-slate-700">
+                          <td className="px-3 py-2 text-slate-700 text-[11px] font-medium">
                             {wo.partNo || "—"}
                           </td>
-                          <td className="px-3 py-2 text-slate-700">
+                          <td className="px-3 py-2 text-slate-600 text-[11px]">
                             {wo.operator}
                           </td>
-                          <td className="px-3 py-2 text-slate-500">
-                            {wo.jobType || "—"}
+                          <td className="px-3 py-2 text-[11px]">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                              {wo.jobType || "—"}
+                            </span>
                           </td>
-                          <td className="px-3 py-2 text-center font-medium text-slate-800">
+                          <td className="px-3 py-2 text-center font-bold text-slate-800 text-[11px] tabular-nums">
                             {wo.jobs}
                           </td>
-                          <td className="px-3 py-2 text-center font-medium text-slate-800">
+                          <td className="px-3 py-2 text-center font-bold text-slate-800 text-[11px] tabular-nums">
                             {wo.cycles}
                           </td>
-                          <td className="px-3 py-2 text-right font-mono text-blue-700">
+                          <td className="px-3 py-2 text-left font-mono text-blue-600 text-[11px] tabular-nums">
                             {formatDuration(wo.cuttingSec)}
                           </td>
-                          <td className="px-3 py-2 text-right font-mono text-amber-700">
+                          <td className="px-3 py-2 text-left font-mono text-amber-600 text-[11px] tabular-nums">
                             {formatDuration(wo.pauseSec)}
                           </td>
-                          <td className="px-3 py-2 text-right font-mono text-slate-600">
+                          <td className="px-3 py-2 text-left font-mono text-slate-500 text-[11px] tabular-nums">
                             {formatDuration(wo.loadingSec)}
                           </td>
-                          <td className="px-3 py-2 text-center text-slate-600">
+                          <td className="px-3 py-2 text-left text-slate-500 text-[11px] tabular-nums">
                             {wo.pcl ? formatDuration(wo.pcl) : "—"}
                           </td>
-                          <td className="px-3 py-2 text-right font-mono text-slate-600">
+                          <td className="px-3 py-2 text-left font-mono text-slate-500 text-[11px] tabular-nums">
                             {formatDuration(wo.avgCycleSec)}
                           </td>
-                          <td className="px-3 py-2 text-center text-blue-700 font-medium">
+                          <td className="px-3 py-2 text-center text-blue-600 font-bold text-[11px] tabular-nums">
                             {wo.allotedQty}
                           </td>
-                          <td className="px-3 py-2 text-center text-emerald-700 font-medium">
+                          <td className="px-3 py-2 text-center text-emerald-600 font-bold text-[11px] tabular-nums">
                             {wo.okQty}
                           </td>
-                          <td
-                            className={`px-3 py-2 text-center font-medium ${wo.rejectQty > 0 ? "text-red-600 font-bold" : "text-slate-400"}`}
-                          >
-                            {wo.rejectQty}
+                          <td className="px-3 py-2 text-center text-[11px] tabular-nums">
+                            <span
+                              className={
+                                wo.rejectQty > 0
+                                  ? "font-bold text-rose-600"
+                                  : "text-slate-400"
+                              }
+                            >
+                              {wo.rejectQty}
+                            </span>
                           </td>
                         </tr>
                       ))}
@@ -695,67 +733,79 @@ export default function ReportPage() {
 
             {/* Panel D: Operator Summary */}
             {stats.operatorSummaries.length > 0 && (
-              <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b bg-slate-50">
-                  <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                    <Users className="h-4 w-4 text-violet-500" />
+              <div
+                className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden"
+                style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.05)" }}
+              >
+                <div className="px-4 py-3 border-b border-slate-100 bg-slate-50/80">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                    <Users className="h-3.5 w-3.5 text-violet-400" />
                     Operator Summary
                   </h3>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="min-w-full text-xs">
+                  <table className="min-w-full text-xs border-collapse">
                     <thead>
-                      <tr className="bg-slate-100 text-slate-600">
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Operator
-                        </th>
-                        <th className="px-3 py-2 text-center font-semibold">
-                          WOs Handled
-                        </th>
-                        <th className="px-3 py-2 text-center font-semibold">
-                          Jobs
-                        </th>
-                        <th className="px-3 py-2 text-center font-semibold">
-                          Cycles
-                        </th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Cutting Time
-                        </th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Pause Time
-                        </th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Avg Cycle
-                        </th>
+                      <tr
+                        style={{
+                          background:
+                            "linear-gradient(180deg,#1e293b 0%,#0f172a 100%)",
+                        }}
+                      >
+                        {[
+                          "Operator",
+                          "WOs",
+                          "Jobs",
+                          "Cycles",
+                          "Cutting Time",
+                          "Pause Time",
+                          "Avg Cycle",
+                        ].map((h) => (
+                          <th
+                            key={h}
+                            className="px-3 py-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400 whitespace-nowrap text-left"
+                          >
+                            {h}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {stats.operatorSummaries.map((op, i) => (
+                      {stats.operatorSummaries.map((op) => (
                         <tr
                           key={op.name}
-                          className={
-                            i % 2 === 0 ? "bg-white" : "bg-slate-50/50"
-                          }
+                          className="border-b border-slate-100 last:border-0 hover:bg-indigo-50/20 transition-colors"
                         >
-                          <td className="px-3 py-2 font-semibold text-violet-700">
-                            {op.name}
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-violet-100 text-violet-700 text-[9px] font-bold flex-shrink-0">
+                                {op.name
+                                  .split(" ")
+                                  .slice(0, 2)
+                                  .map((w) => w[0]?.toUpperCase() ?? "")
+                                  .join("")}
+                              </span>
+                              <span className="font-semibold text-violet-700 text-[11px]">
+                                {op.name}
+                              </span>
+                            </div>
                           </td>
-                          <td className="px-3 py-2 text-center font-medium text-slate-800">
+                          <td className="px-3 py-2 text-center font-bold text-slate-700 text-[11px] tabular-nums">
                             {op.woCount}
                           </td>
-                          <td className="px-3 py-2 text-center font-medium text-slate-800">
+                          <td className="px-3 py-2 text-center font-bold text-slate-700 text-[11px] tabular-nums">
                             {op.totalJobs}
                           </td>
-                          <td className="px-3 py-2 text-center font-medium text-slate-800">
+                          <td className="px-3 py-2 text-center font-bold text-slate-700 text-[11px] tabular-nums">
                             {op.totalCycles}
                           </td>
-                          <td className="px-3 py-2 text-right font-mono text-blue-700">
+                          <td className="px-3 py-2 font-mono text-blue-600 text-[11px] tabular-nums">
                             {formatDuration(op.totalCuttingSec)}
                           </td>
-                          <td className="px-3 py-2 text-right font-mono text-amber-700">
+                          <td className="px-3 py-2 font-mono text-amber-600 text-[11px] tabular-nums">
                             {formatDuration(op.totalPauseSec)}
                           </td>
-                          <td className="px-3 py-2 text-right font-mono text-slate-600">
+                          <td className="px-3 py-2 font-mono text-slate-500 text-[11px] tabular-nums">
                             {formatDuration(op.avgCycleSec)}
                           </td>
                         </tr>
@@ -773,20 +823,31 @@ export default function ReportPage() {
           <DotMatrixEmptyState />
         )}
 
-        {/* Report Table — only rendered when there is data */}
+        {/* Filter Bar + Report Table — only rendered when there is data */}
         {rows.length > 0 && (
           <>
-            <div className="flex items-center justify-end mb-2 text-xs text-slate-500">
-              {searchQuery && (
-                <span>
-                  Showing {filteredRows.length} of {rows.length} rows
-                </span>
-              )}
-            </div>
+            <ReportFilterBar
+              filters={reportFilters}
+              onChange={handleFilterChange}
+              availableActions={filterOptions.actions}
+              availableJobTypes={filterOptions.jobTypes}
+              availableOperators={filterOptions.operators}
+              availableLabels={filterOptions.labels}
+              totalRows={rows.length}
+              filteredRows={filteredRows.length}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+            />
             <ReportTable
               rows={filteredRows}
               loading={loading}
-              isFiltered={!!searchQuery}
+              isFiltered={
+                !!searchQuery ||
+                reportFilters.actions.length > 0 ||
+                reportFilters.jobTypes.length > 0 ||
+                reportFilters.operators.length > 0 ||
+                reportFilters.labels.length > 0
+              }
             />
           </>
         )}
