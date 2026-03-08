@@ -102,7 +102,7 @@ function getActionCfg(action?: string): ActionCfg {
 }
 
 function ActionBadge({ action }: { action?: string | undefined }) {
-  if (!action) return <span className="text-slate-300 text-xs">—</span>;
+  if (!action) return <span className="text-slate-400 text-xs">—</span>;
   const { icon, label, cls } = getActionCfg(action);
   return (
     <span
@@ -178,7 +178,7 @@ function LabelBadge({
   /* ── Subsequent rows in a job block — muted outline pill ── */
   if (jobBlockLabel) {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-[3px] rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+      <span className="inline-flex items-center gap-1 px-2 py-[3px] rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300 whitespace-nowrap">
         {jobBlockLabel}
       </span>
     );
@@ -232,11 +232,11 @@ function DurationChip({
       ? "text-white bg-rose-500 border-rose-600 shadow-sm shadow-rose-200"
       : varianceColor === "green"
         ? "text-white bg-emerald-500 border-emerald-600 shadow-sm shadow-emerald-200"
-        : "text-slate-100 bg-slate-800 border-slate-900 shadow-sm shadow-slate-300";
+        : "text-slate-700 bg-slate-100 border-slate-300 shadow-sm";
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 px-2 py-[3px] rounded-md font-mono text-[11px] font-semibold border",
+        "inline-flex items-center gap-1 px-2.5 py-[3px] rounded-full font-mono text-[11px] font-semibold border",
         cls,
       )}
     >
@@ -300,7 +300,7 @@ function OperatorCell({ name }: { name?: string | undefined }) {
     .join("");
   const colorCls =
     AV_COLORS[
-      name.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % AV_COLORS.length
+    name.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % AV_COLORS.length
     ];
   return (
     <div className="flex items-center gap-1.5 min-w-0">
@@ -803,7 +803,7 @@ export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
                           : row.action === "SPINDLE_OFF"
                             ? "border-l-[3px] border-l-slate-400"
                             : row.action === "KEY_ON" ||
-                                row.action === "KEY_OFF"
+                              row.action === "KEY_OFF"
                               ? "border-l-[3px] border-l-cyan-400"
                               : row.isComputed
                                 ? "border-l-[3px] border-l-slate-200"
@@ -834,7 +834,7 @@ export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
                     !isInBlock && rowBg,
                     !isInBlock && accentBorder,
                     !isInBlock &&
-                      "hover:bg-indigo-50/30 hover:border-l-indigo-400 hover:border-l-[3px]",
+                    "hover:bg-indigo-50/30 hover:border-l-indigo-400 hover:border-l-[3px]",
                     isFirstInBlock && "border-t-2 border-t-emerald-400",
                     isLastInBlock && "border-b-2 border-b-emerald-400",
                     isInBlock && "border-l-[3px] border-l-emerald-300",
@@ -857,14 +857,14 @@ export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
 
                   {/* Log ID */}
                   <td className="px-3 py-2.5">
-                    <span className="font-mono text-[11px] text-slate-400 tabular-nums">
-                      {row.logId ?? <span className="text-slate-200">—</span>}
+                    <span className="font-mono text-[11px] text-slate-600 tabular-nums">
+                      {row.logId ?? <span className="text-slate-300">—</span>}
                     </span>
                   </td>
 
                   {/* Log Time */}
                   <td className="px-3 py-2.5 whitespace-nowrap">
-                    <span className="font-mono text-[11px] text-slate-500 tabular-nums">
+                    <span className="font-mono text-[11px] text-slate-700 font-medium tabular-nums">
                       {fmtTime(row.logTime)}
                     </span>
                   </td>
