@@ -47,6 +47,7 @@ import {
   extractFilterOptions,
   applyFilters,
 } from "./ReportFilterBar";
+import { VMC_MACHINES, CNC_MACHINES, getMachineLabel, getMachineType } from "./machine-config";
 
 const TOKEN = import.meta.env.VITE_API_TOKEN;
 
@@ -85,9 +86,8 @@ function formatDisplayDate(s: string): string {
 function CheckItem({ done, label }: { done: boolean; label: string }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 text-xs font-medium transition-colors ${
-        done ? "text-emerald-600" : "text-slate-400"
-      }`}
+      className={`inline-flex items-center gap-1.5 text-xs font-medium transition-colors ${done ? "text-emerald-600" : "text-slate-400"
+        }`}
     >
       {done ? (
         <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
@@ -154,17 +154,38 @@ export default function ReportPage() {
     selectionSummary !== null &&
     !selectionSummary.isInvalid;
 
-  // Derive available filter options from raw rows
-  const filterOptions = useMemo(() => extractFilterOptions(rows), [rows]);
+  const dashboardRows = useMemo(
+    () => rows.filter((row) => !row.excludeFromDashboard),
+    [rows],
+  );
+
+  const exportRows = useMemo(
+    () => rows.filter((row) => !row.excludeFromExport),
+    [rows],
+  );
+
+  // Derive available filter options from dashboard rows
+  const filterOptions = useMemo(
+    () => extractFilterOptions(dashboardRows),
+    [dashboardRows],
+  );
 
   // Filter rows based on search query + active filters
   const filteredRows = useMemo(() => {
-    let result = rows;
+    let result = dashboardRows;
     if (searchQuery.trim())
       result = result.filter((row) => matchRow(row, searchQuery));
     result = applyFilters(result, reportFilters);
     return result;
-  }, [rows, searchQuery, reportFilters]);
+  }, [dashboardRows, searchQuery, reportFilters]);
+
+  const filteredExportRows = useMemo(() => {
+    let result = exportRows;
+    if (searchQuery.trim())
+      result = result.filter((row) => matchRow(row, searchQuery));
+    result = applyFilters(result, reportFilters);
+    return result;
+  }, [exportRows, searchQuery, reportFilters]);
 
   // Reset filters when new data is loaded
   const handleFilterChange = (f: ReportFilters) => setReportFilters(f);
@@ -221,7 +242,7 @@ export default function ReportPage() {
     <div className="min-h-screen bg-premium-page p-6 space-y-5 dark:text-slate-100">
       {/* ── Page Header ── */}
       <header
-        className="flex items-center justify-between px-5 py-4 bg-white rounded-2xl border border-slate-200/80 dark:bg-slate-800 dark:border-slate-700"
+        className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 bg-white rounded-2xl border border-slate-200/80 dark:bg-slate-800 dark:border-slate-700"
         style={{
           boxShadow: "0 2px 12px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04)",
         }}
@@ -249,9 +270,28 @@ export default function ReportPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-slate-500 text-xs font-medium border border-slate-200">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-medium border border-indigo-200">
+            <FileText className="h-3.5 w-3.5" />
+            Machine Report
+          </span>
+          <Link
+            to="/report/personnel"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-violet-50 text-violet-700 text-xs font-medium border border-violet-200 hover:bg-violet-100 transition-colors"
+          >
+            <Users className="h-3.5 w-3.5" />
+            Personnel Report
+          </Link>
+          <span
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border ${
+              getMachineType(config.deviceId) === 'VMC'
+                ? 'bg-blue-50 text-blue-700 border-blue-200'
+                : getMachineType(config.deviceId) === 'CNC'
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-slate-100 text-slate-500 border-slate-200'
+            }`}
+          >
             <Monitor className="h-3.5 w-3.5" />
-            Machine #{config.deviceId}
+            {getMachineLabel(config.deviceId)}
           </span>
           <ThemeToggle />
         </div>
@@ -275,12 +315,11 @@ export default function ReportPage() {
         <div className="p-5 space-y-4">
           {/* Row 1 — Device ID + Date Range */}
           <div className="flex flex-wrap gap-4 items-end">
-            <div className="w-36 shrink-0">
+            <div className="w-48 shrink-0">
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5">
-                Device ID
+                Machine
               </label>
-              <input
-                type="number"
+              <select
                 value={config.deviceId}
                 onChange={(e) =>
                   setConfig({
@@ -288,8 +327,19 @@ export default function ReportPage() {
                     deviceId: parseInt(e.target.value) || 0,
                   })
                 }
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400 outline-none text-sm text-slate-800 font-semibold bg-slate-50/60 transition-all"
-              />
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-400/50 focus:border-indigo-400 outline-none text-sm text-slate-800 font-semibold bg-slate-50/60 transition-all cursor-pointer"
+              >
+                <optgroup label="─── VMC ───">
+                  {VMC_MACHINES.map((m) => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="─── CNC ───">
+                  {CNC_MACHINES.map((m) => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </optgroup>
+              </select>
             </div>
 
             <div className="flex-1 min-w-0">
@@ -306,13 +356,12 @@ export default function ReportPage() {
           {/* Row 2 — Selection Summary Bar (appears once both dates filled) */}
           {selectionSummary && (
             <div
-              className={`rounded-lg border px-4 py-2.5 text-sm transition-all ${
-                selectionSummary.isInvalid
+              className={`rounded-lg border px-4 py-2.5 text-sm transition-all ${selectionSummary.isInvalid
                   ? "bg-red-50 border-red-200"
                   : selectionSummary.heavyQuery
                     ? "bg-amber-50 border-amber-200"
                     : "bg-indigo-50 border-indigo-100"
-              }`}
+                }`}
             >
               {selectionSummary.isInvalid ? (
                 <div className="flex items-center gap-2 text-red-600 font-medium">
@@ -349,7 +398,7 @@ export default function ReportPage() {
                   {/* Device */}
                   <span className="inline-flex items-center gap-1 text-slate-500 text-xs">
                     <Monitor className="h-3.5 w-3.5" />
-                    Machine&nbsp;#{config.deviceId}
+                    {getMachineLabel(config.deviceId)}
                   </span>
 
                   {/* Heavy query warning */}
@@ -453,7 +502,7 @@ export default function ReportPage() {
                       const { exportToExcel } = await import("./export-utils");
                       if (!stats) return;
                       await exportToExcel({
-                        rows: filteredRows,
+                        rows: filteredExportRows,
                         stats,
                         woDetailsMap,
                         deviceNameMap,
@@ -481,7 +530,7 @@ export default function ReportPage() {
                         await import("./export-utils");
                       if (!stats) return;
                       await exportToGroupedExcel({
-                        rows: filteredRows,
+                        rows: exportRows,
                         stats,
                         woDetailsMap,
                         deviceNameMap,
@@ -821,12 +870,12 @@ export default function ReportPage() {
         )}
 
         {/* ── Empty state: dot-matrix display (no data yet, not loading) ── */}
-        {rows.length === 0 && !loading && !showPreloader && (
+        {dashboardRows.length === 0 && !loading && !showPreloader && (
           <DotMatrixEmptyState />
         )}
 
         {/* Filter Bar + Report Table — only rendered when there is data */}
-        {rows.length > 0 && (
+        {dashboardRows.length > 0 && (
           <>
             <ReportFilterBar
               filters={reportFilters}
@@ -835,7 +884,8 @@ export default function ReportPage() {
               availableJobTypes={filterOptions.jobTypes}
               availableOperators={filterOptions.operators}
               availableLabels={filterOptions.labels}
-              totalRows={rows.length}
+              availableMachines={filterOptions.machines}
+              totalRows={dashboardRows.length}
               filteredRows={filteredRows.length}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
@@ -848,7 +898,8 @@ export default function ReportPage() {
                 reportFilters.actions.length > 0 ||
                 reportFilters.jobTypes.length > 0 ||
                 reportFilters.operators.length > 0 ||
-                reportFilters.labels.length > 0
+                reportFilters.labels.length > 0 ||
+                reportFilters.machines.length > 0
               }
             />
           </>

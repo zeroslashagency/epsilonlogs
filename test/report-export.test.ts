@@ -624,6 +624,40 @@ describe('report workbook structure', () => {
     const rowFill = logsSheet?.getCell('A2').fill as { fgColor?: { argb?: string } };
     expect(rowFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.keyActionBg);
   });
+
+  it('skips dashboard-only rows in logs export', async () => {
+    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails({ job_type: 2 })]]);
+    const deviceNameMap = new Map<number, string>([[15, 'VMC - 05']]);
+
+    const exportOnlyBlock = makeJobBlockRow('Setting', 2, {
+      excludeFromDashboard: true,
+    });
+    const dashboardOnlySpindleOn = makeEventRow({
+      rowId: 'dashboard-log-7201',
+      logId: 7201,
+      action: 'SPINDLE_ON',
+      jobType: 'Setting',
+      label: 'SETTING PROCESS',
+      jobBlockLabel: 'SETTING PROCESS',
+      excludeFromExport: true,
+      originalLog: {
+        ...makeEventRow().originalLog!,
+        log_id: 7201,
+        action: 'SPINDLE_ON',
+        job_type: '2',
+      },
+    });
+
+    const workbook = await buildExcelWorkbook({
+      rows: [exportOnlyBlock, dashboardOnlySpindleOn],
+      stats: makeStats(),
+      woDetailsMap,
+      deviceNameMap,
+    });
+
+    const logsSheet = workbook.getWorksheet('Logs');
+    expect(logsSheet?.actualRowCount).toBe(2);
+  });
 });
 
 describe('grouped workbook structure', () => {
@@ -751,37 +785,6 @@ describe('grouped workbook structure', () => {
     const bottomBorder = groupedSheet?.getCell('A3').border?.bottom;
     expect(topBorder?.style).toBe('thick');
     expect(bottomBorder?.style).toBe('thick');
-  });
-
-  it.each([
-    [2, 'Setting'],
-    [3, 'Calibration'],
-    [4, 'Maintenance'],
-    [5, 'Man'],
-    [6, 'Training'],
-    [7, 'RD'],
-    [1, 'Production'],
-  ])('JOB column shows clean label (no numeric prefix) for job type %i → "%s"', async (jobTypeCode, expectedLabel) => {
-    const woDetailsMap = new Map<number, WoDetails>([[303, makeWoDetails({ job_type: jobTypeCode })]]);
-
-    const jobBlock = makeJobBlockRow(expectedLabel as ReportRow['jobType'], jobTypeCode);
-
-    const workbook = await buildGroupedExcelWorkbook({
-      rows: [jobBlock],
-      stats: makeStats(),
-      woDetailsMap,
-      deviceNameMap: new Map(),
-    });
-
-    const sheet = workbook.getWorksheet('Logs Grouped');
-    // First data row (row 2) is the START row; G column = JOB
-    const jobCellStart = String(sheet?.getCell('G2').value ?? '');
-    const jobCellEnd = String(sheet?.getCell('G3').value ?? '');
-
-    // Must be the clean label — no "1: " or "2: " prefix
-    expect(jobCellStart).toBe(expectedLabel);
-    expect(jobCellEnd).toBe(expectedLabel);
-    expect(jobCellStart).not.toMatch(/^\d+:\s/);
   });
 
   it('includes comments for WO_START, WO_PAUSE, WO_RESUME and WO_STOP in grouped export', async () => {
@@ -1274,7 +1277,7 @@ describe('grouped workbook structure', () => {
     expect(groupedSheet?.getCell('E3').value).toBe('Cutting: 00:03:20');
     expect(groupedSheet?.getCell('F3').value).toBe('Loading: 00:00:20');
     expect(groupedSheet?.getCell('G3').value).toBe('Pause: 00:00:30');
-    expect(groupedSheet?.getCell('H3').value).toBe('Key: 00:00:00 | Cls: 00:04:10 | Rem: 05:55:50');
+    expect(groupedSheet?.getCell('H3').value).toBe('Key: 00:00:00 | Idle: 00:00:10 | Gap: 00:00:00 | Cls: 00:04:20 | Rem: 05:55:40 | Jobs: 2 | Cyc: 4 | OK: 57 | Rej: 1');
     expect(groupedSheet?.getCell('I3').value).toBe('CHECK');
 
     const actionFill = groupedSheet?.getCell('D3').fill as { fgColor?: { argb?: string } };
@@ -1283,6 +1286,327 @@ describe('grouped workbook structure', () => {
     expect(actionFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.groupedYellow);
     expect(timeFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.groupedGreen);
     expect(notesFill?.fgColor?.argb).toBe(LOG_STYLE_COLORS.pauseActionBg);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 20 graduated tests: end summary row calculations
+// ---------------------------------------------------------------------------
+describe('end summary calculations – 20 graduated tests', () => {
+  // ── helpers ────────────────────────────────────────────────────────────
+  const makeZeroStats = (): ReportStats => ({
+    totalJobs: 0,
+    totalCycles: 0,
+    totalCuttingSec: 0,
+    totalPauseSec: 0,
+    totalLoadingUnloadingSec: 0,
+    totalIdleSec: 0,
+    totalWoDurationSec: 0,
+    machineUtilization: 0,
+    totalAllotedQty: 0,
+    totalOkQty: 0,
+    totalRejectQty: 0,
+    totalLogs: 0,
+    woBreakdowns: [],
+    operatorSummaries: [],
+  });
+
+  const makeSummaryWorkbook = (
+    rows: ReportRow[],
+    stats: ReportStats,
+    reportConfig?: { deviceId: number; startDate: string; endDate: string },
+  ) =>
+    buildGroupedExcelWorkbook({
+      rows,
+      stats,
+      woDetailsMap: new Map(),
+      deviceNameMap: new Map(),
+      ...(reportConfig ? { reportConfig } : {}),
+    });
+
+  const summaryRow = (sheet: ReturnType<import('exceljs').Workbook['getWorksheet']>, rowNum: number) => ({
+    a: String(sheet?.getCell(`A${rowNum}`).value ?? ''),
+    b: String(sheet?.getCell(`B${rowNum}`).value ?? ''),
+    c: String(sheet?.getCell(`C${rowNum}`).value ?? ''),
+    d: String(sheet?.getCell(`D${rowNum}`).value ?? ''),   // Input Total
+    e: String(sheet?.getCell(`E${rowNum}`).value ?? ''),   // Cutting
+    f: String(sheet?.getCell(`F${rowNum}`).value ?? ''),   // Loading
+    g: String(sheet?.getCell(`G${rowNum}`).value ?? ''),   // Pause
+    h: String(sheet?.getCell(`H${rowNum}`).value ?? ''),   // Key|Cls|Rem
+    i: String(sheet?.getCell(`I${rowNum}`).value ?? ''),   // Status
+  });
+
+  // ── TC-01: All-zero stats + empty rows ─────────────────────────────────
+  it('TC-01: all-zero stats + empty rows → all metrics 00:00:00, status OK', async () => {
+    // same start+end → inputWindow = 0 → classified = 0 → Rem = 0 → OK
+    const wb = await makeSummaryWorkbook([], makeZeroStats(), { deviceId: 1, startDate: '09-02-2026 08:00', endDate: '09-02-2026 08:00' });
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3); // header=row1, no data rows, blockStart = 1+2 = 3
+    expect(s.a).toBe('END SUMMARY');
+    expect(s.e).toBe('Cutting: 00:00:00');
+    expect(s.f).toBe('Loading: 00:00:00');
+    expect(s.g).toBe('Pause: 00:00:00');
+    expect(s.h).toContain('Key: 00:00:00');
+    expect(s.h).toContain('Cls: 00:00:00');
+    expect(s.h).toContain('Rem: 00:00:00');
+    expect(s.i).toBe('OK');
+  });
+
+  // ── TC-02: Cutting only ────────────────────────────────────────────────
+  it('TC-02: non-zero cutting only → cutting shows, loading/pause/key all zero', async () => {
+    const stats = { ...makeZeroStats(), totalCuttingSec: 3600 }; // 1 hour
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.e).toBe('Cutting: 01:00:00');
+    expect(s.f).toBe('Loading: 00:00:00');
+    expect(s.g).toBe('Pause: 00:00:00');
+    expect(s.h).toContain('Key: 00:00:00');
+  });
+
+  // ── TC-03: Loading only ────────────────────────────────────────────────
+  it('TC-03: non-zero loading only → loading shows, cutting/pause zero', async () => {
+    const stats = { ...makeZeroStats(), totalLoadingUnloadingSec: 120 }; // 2 min
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.f).toBe('Loading: 00:02:00');
+    expect(s.e).toBe('Cutting: 00:00:00');
+    expect(s.g).toBe('Pause: 00:00:00');
+  });
+
+  // ── TC-04: Pause only ─────────────────────────────────────────────────
+  it('TC-04: non-zero pause only → pause shows, cutting/loading zero', async () => {
+    const stats = { ...makeZeroStats(), totalPauseSec: 1800 }; // 30 min
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.g).toBe('Pause: 00:30:00');
+    expect(s.e).toBe('Cutting: 00:00:00');
+    expect(s.f).toBe('Loading: 00:00:00');
+  });
+
+  // ── TC-05: Key time from single KEY_ON/OFF pair in rows ────────────────
+  it('TC-05: KEY_ON + KEY_OFF pair → key seconds computed from row timestamps', async () => {
+    const keyOn = makeEventRow({
+      rowId: 'tc05-key-on', logId: 9001, action: 'KEY_ON',
+      logTime: new Date('2026-02-09T06:00:00Z'),
+      timestamp: new Date('2026-02-09T06:00:00Z').getTime(),
+      originalLog: { ...makeEventRow().originalLog!, log_id: 9001, action: 'KEY_ON' },
+    });
+    const keyOff = makeEventRow({
+      rowId: 'tc05-key-off', logId: 9002, action: 'KEY_OFF',
+      logTime: new Date('2026-02-09T06:05:00Z'), // 5 min later
+      timestamp: new Date('2026-02-09T06:05:00Z').getTime(),
+      originalLog: { ...makeEventRow().originalLog!, log_id: 9002, action: 'KEY_OFF' },
+    });
+    const wb = await makeSummaryWorkbook([keyOn, keyOff], makeZeroStats());
+    const sheet = wb.getWorksheet('Logs Grouped');
+    // header=row1, KEY_ON=row2, KEY_OFF=row3, rowCount=3, blockStart=3+2=5
+    const s = summaryRow(sheet, 5);
+    expect(s.h).toContain('Key: 00:05:00');
+  });
+
+  // ── TC-06: Cutting + Loading combined ─────────────────────────────────
+  it('TC-06: cutting 600s + loading 60s → classified reflects both', async () => {
+    const stats = { ...makeZeroStats(), totalCuttingSec: 600, totalLoadingUnloadingSec: 60 };
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.e).toBe('Cutting: 00:10:00');
+    expect(s.f).toBe('Loading: 00:01:00');
+    expect(s.h).toContain('Cls: 00:11:00');
+  });
+
+  // ── TC-07: Cutting + Pause combined ───────────────────────────────────
+  it('TC-07: cutting 120s + pause 180s → classified = 300s = 00:05:00', async () => {
+    const stats = { ...makeZeroStats(), totalCuttingSec: 120, totalPauseSec: 180 };
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.h).toContain('Cls: 00:05:00');
+  });
+
+  // ── TC-08: All four combined, status OK (inputTotal = classified exact) ─
+  it('TC-08: inputTotal equals classified exactly → status = OK, Rem = 00:00:00', async () => {
+    // cutting=100s, loading=50s, pause=50s = 200s classified
+    // inputWindow = 200s → 09:00 to 09:03:20 (200s window)
+    const stats = { ...makeZeroStats(), totalCuttingSec: 100, totalLoadingUnloadingSec: 50, totalPauseSec: 50 };
+    // Use WoDuration as fallback (no reportConfig) → inputTotalSec = totalWoDurationSec
+    const statsWithDuration = { ...stats, totalWoDurationSec: 200 };
+    const wb = await makeSummaryWorkbook([], statsWithDuration);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.h).toContain('Rem: 00:00:00');
+    expect(s.i).toBe('OK');
+  });
+
+  // ── TC-09: Remaining > 0 (unclassified time) ───────────────────────────
+  it('TC-09: classified < inputTotal → positive Rem, status = CHECK', async () => {
+    // 2h input, 30min classified → 1h30m remaining
+    const stats = { ...makeZeroStats(), totalCuttingSec: 1800, totalWoDurationSec: 7200 };
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.h).toContain('Rem: 01:30:00');
+    expect(s.i).toBe('CHECK');
+  });
+
+  // ── TC-10: Remaining < 0 (classified exceeds inputTotal) ──────────────
+  it('TC-10: classified > inputTotal → negative Rem with minus sign, status = CHECK', async () => {
+    // 600s cutting but only 300s WO duration → -300s remaining
+    const stats = { ...makeZeroStats(), totalCuttingSec: 600, totalWoDurationSec: 300 };
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.h).toMatch(/Rem: -\d{2}:\d{2}:\d{2}/);
+    expect(s.i).toBe('CHECK');
+  });
+
+  // ── TC-11: reportConfig overrides totalWoDurationSec as inputTotal ─────
+  it('TC-11: reportConfig window overrides stats.totalWoDurationSec for inputTotal', async () => {
+    const stats = { ...makeZeroStats(), totalWoDurationSec: 99999 }; // should be ignored
+    // 1h window from config
+    const wb = await makeSummaryWorkbook([], stats, {
+      deviceId: 1,
+      startDate: '09-02-2026 08:00',  // DD-MM-YYYY HH:MM — supported by dashMatch
+      endDate: '09-02-2026 09:00',
+    });
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.d).toBe('Input Total: 01:00:00');
+  });
+
+  // ── TC-12: No reportConfig → falls back to stats.totalWoDurationSec ────
+  it('TC-12: no reportConfig → inputTotal = stats.totalWoDurationSec', async () => {
+    const stats = { ...makeZeroStats(), totalWoDurationSec: 3600 };
+    const wb = await makeSummaryWorkbook([], stats); // no reportConfig
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.d).toBe('Input Total: 01:00:00');
+  });
+
+  // ── TC-13: Multiple KEY_ON/OFF pairs accumulate ─────────────────────────
+  it('TC-13: two KEY_ON/OFF pairs → key time is sum of both gaps', async () => {
+    const base = makeEventRow().originalLog!;
+    const k1on = makeEventRow({ rowId: 'k1on', logId: 8001, action: 'KEY_ON', logTime: new Date('2026-02-09T06:00:00Z'), timestamp: new Date('2026-02-09T06:00:00Z').getTime(), originalLog: { ...base, log_id: 8001, action: 'KEY_ON' } });
+    const k1off = makeEventRow({ rowId: 'k1off', logId: 8002, action: 'KEY_OFF', logTime: new Date('2026-02-09T06:03:00Z'), timestamp: new Date('2026-02-09T06:03:00Z').getTime(), originalLog: { ...base, log_id: 8002, action: 'KEY_OFF' } }); // +3 min
+    const k2on = makeEventRow({ rowId: 'k2on', logId: 8003, action: 'KEY_ON', logTime: new Date('2026-02-09T07:00:00Z'), timestamp: new Date('2026-02-09T07:00:00Z').getTime(), originalLog: { ...base, log_id: 8003, action: 'KEY_ON' } });
+    const k2off = makeEventRow({ rowId: 'k2off', logId: 8004, action: 'KEY_OFF', logTime: new Date('2026-02-09T07:07:00Z'), timestamp: new Date('2026-02-09T07:07:00Z').getTime(), originalLog: { ...base, log_id: 8004, action: 'KEY_OFF' } }); // +7 min
+    const wb = await makeSummaryWorkbook([k1on, k1off, k2on, k2off], makeZeroStats());
+    const sheet = wb.getWorksheet('Logs Grouped');
+    // 4 data rows → summary at row 6
+    const lastRow = sheet!.rowCount; // summary is always last+2
+    let summaryRowNum = -1;
+    for (let r = 2; r <= lastRow + 3; r++) {
+      if (String(sheet?.getCell(`A${r}`).value ?? '') === 'END SUMMARY') { summaryRowNum = r; break; }
+    }
+    expect(summaryRowNum).toBeGreaterThan(0);
+    const s = summaryRow(sheet, summaryRowNum);
+    expect(s.h).toContain('Key: 00:10:00'); // 3+7 = 10 min
+  });
+
+  // ── TC-14: KEY_ON without matching KEY_OFF is ignored ──────────────────
+  it('TC-14: lone KEY_ON with no KEY_OFF → key time = 00:00:00', async () => {
+    const base = makeEventRow().originalLog!;
+    const loneKey = makeEventRow({ rowId: 'lone-k', logId: 9010, action: 'KEY_ON', logTime: new Date('2026-02-09T06:00:00Z'), timestamp: new Date('2026-02-09T06:00:00Z').getTime(), originalLog: { ...base, log_id: 9010, action: 'KEY_ON' } });
+    const wb = await makeSummaryWorkbook([loneKey], makeZeroStats());
+    const sheet = wb.getWorksheet('Logs Grouped');
+    let summaryRowNum = -1;
+    for (let r = 2; r <= 10; r++) {
+      if (String(sheet?.getCell(`A${r}`).value ?? '') === 'END SUMMARY') { summaryRowNum = r; break; }
+    }
+    const s = summaryRow(sheet, summaryRowNum);
+    expect(s.h).toContain('Key: 00:00:00');
+  });
+
+  // ── TC-15: Seconds format hh:mm:ss exact ──────────────────────────────
+  it('TC-15: cutting = 3661s (1h 1m 1s) → formats as 01:01:01', async () => {
+    const stats = { ...makeZeroStats(), totalCuttingSec: 3661 };
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.e).toBe('Cutting: 01:01:01');
+  });
+
+  // ── TC-16: Loading stat maps to Loading column F ───────────────────────
+  it('TC-16: loading 90s → column F shows Loading: 00:01:30', async () => {
+    const stats = { ...makeZeroStats(), totalLoadingUnloadingSec: 90 };
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.f).toBe('Loading: 00:01:30');
+  });
+
+  // ── TC-17: Full realistic — 3 spindle jobs + 1 pause + loading + key ───
+  it('TC-17: full realistic scenario → all columns independently correct', async () => {
+    // Stats: 3 jobs × 600s cutting = 1800s, 120s loading, 300s pause
+    // Input window: 3600s (1h)
+    const stats: ReportStats = {
+      ...makeZeroStats(),
+      totalCuttingSec: 1800,
+      totalLoadingUnloadingSec: 120,
+      totalPauseSec: 300,
+      totalWoDurationSec: 3600,
+    };
+    // Add a KEY pair: 2min
+    const base = makeEventRow().originalLog!;
+    const kon = makeEventRow({ rowId: 'tc17-kon', logId: 7701, action: 'KEY_ON', logTime: new Date('2026-02-09T06:00:00Z'), timestamp: new Date('2026-02-09T06:00:00Z').getTime(), originalLog: { ...base, log_id: 7701, action: 'KEY_ON' } });
+    const koff = makeEventRow({ rowId: 'tc17-koff', logId: 7702, action: 'KEY_OFF', logTime: new Date('2026-02-09T06:02:00Z'), timestamp: new Date('2026-02-09T06:02:00Z').getTime(), originalLog: { ...base, log_id: 7702, action: 'KEY_OFF' } });
+    const wb = await makeSummaryWorkbook([kon, koff], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    let summaryRowNum = -1;
+    for (let r = 2; r <= 10; r++) {
+      if (String(sheet?.getCell(`A${r}`).value ?? '') === 'END SUMMARY') { summaryRowNum = r; break; }
+    }
+    expect(summaryRowNum).toBeGreaterThan(0);
+    const s = summaryRow(sheet, summaryRowNum);
+    // cutting=1800, loading=120, pause=300, key=120 → cls=2340s=00:39:00
+    expect(s.e).toBe('Cutting: 00:30:00');
+    expect(s.f).toBe('Loading: 00:02:00');
+    expect(s.g).toBe('Pause: 00:05:00');
+    expect(s.h).toContain('Key: 00:02:00');
+    expect(s.h).toContain('Cls: 00:39:00');
+    // input=3600, classified=2340 → rem=1260s=00:21:00
+    expect(s.h).toContain('Rem: 00:21:00');
+    expect(s.i).toBe('CHECK');
+  });
+
+  // ── TC-18: Status = OK when remainder exactly 0 ───────────────────────
+  it('TC-18: remainder exactly 0 → status cell = OK', async () => {
+    // cutting=200, loading=0, pause=0, key=0, woDuration=200
+    const stats = { ...makeZeroStats(), totalCuttingSec: 200, totalWoDurationSec: 200 };
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.i).toBe('OK');
+  });
+
+  // ── TC-19: Status = CHECK when remainder ≠ 0 ─────────────────────────
+  it('TC-19: remainder ≠ 0 → status cell = CHECK', async () => {
+    const stats = { ...makeZeroStats(), totalCuttingSec: 100, totalWoDurationSec: 500 };
+    const wb = await makeSummaryWorkbook([], stats);
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.i).toBe('CHECK');
+  });
+
+  // ── TC-20: Column label text verification ────────────────────────────
+  it('TC-20: summary row column labels start with correct prefixes', async () => {
+    const wb = await makeSummaryWorkbook([], makeZeroStats(), {
+      deviceId: 1,
+      startDate: '09-02-2026 10:00',  // DD-MM-YYYY HH:MM format
+      endDate: '09-02-2026 11:00',
+    });
+    const sheet = wb.getWorksheet('Logs Grouped');
+    const s = summaryRow(sheet, 3);
+    expect(s.a).toBe('END SUMMARY');
+    expect(s.b).toBe('RPT');
+    expect(s.d).toMatch(/^Input Total:/);
+    expect(s.e).toMatch(/^Cutting:/);
+    expect(s.f).toMatch(/^Loading:/);
+    expect(s.g).toMatch(/^Pause:/);
+    expect(s.h).toMatch(/^Key:.*\| Cls:.*\| Rem:/);
   });
 });
 

@@ -131,8 +131,11 @@ export function injectComputedRows(
                 timestamp: new Date(segmentStartLog.log_time).getTime() + 100,
                 operatorName: operator,
                 woSpecs,
+                excludeFromDashboard: true,
             });
         }
+
+        rows.push(...buildNonProductionDashboardRows(segment, operator, woSpecs, block?.label));
     } else {
         // PRODUCTION: Standard behavior (cycles) or estimated blocks
         for (let bIdx = 0; bIdx < jobBlocks.length; bIdx++) {
@@ -444,6 +447,47 @@ function makeGapRow(idSuffix: string, ts: number, sec: number, label: string, jo
         woSpecs,
         jobBlockLabel,
     };
+}
+
+function buildNonProductionDashboardRows(
+    segment: WoSegment,
+    operator: string,
+    woSpecs?: { woId: string; pclText: string; allotted: number },
+    jobBlockLabel?: string,
+): ReportRow[] {
+    const pairedSpindleOffDurations = new Map<number, number>();
+    for (const cycle of segment.spindleCycles) {
+        pairedSpindleOffDurations.set(cycle.offLog.log_id, cycle.durationSec);
+    }
+
+    return segment.logs
+        .filter((log) => ![
+            "WO_START",
+            "WO_STOP",
+            "WO_PAUSE",
+            "WO_RESUME",
+            "KEY_ON",
+            "KEY_OFF",
+        ].includes(log.action))
+        .map((log) => {
+            const durationSec = pairedSpindleOffDurations.get(log.log_id);
+            return {
+                rowId: `dashboard-log-${log.log_id}`,
+                logId: log.log_id,
+                logTime: new Date(log.log_time),
+                action: log.action,
+                durationText: typeof durationSec === "number" ? formatDuration(durationSec) : undefined,
+                durationSec,
+                label: jobBlockLabel,
+                jobType: segment.jobType,
+                jobBlockLabel,
+                originalLog: log,
+                timestamp: new Date(log.log_time).getTime(),
+                operatorName: operator,
+                woSpecs,
+                excludeFromExport: true,
+            } satisfies ReportRow;
+        });
 }
 
 // Helper functions removed in favor of format-utils.ts

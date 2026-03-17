@@ -80,6 +80,18 @@ function getActionCfg(action?: string): ActionCfg {
         label: "Spindle Off",
         cls: "bg-slate-700 text-white border-slate-800 ring-slate-500/30 shadow-sm shadow-slate-300",
       };
+    case "MTR_ON":
+      return {
+        icon: <Play className="h-3 w-3" />,
+        label: "Maint. On",
+        cls: "bg-orange-500 text-white border-orange-600 ring-orange-400/30 shadow-sm shadow-orange-200",
+      };
+    case "MTR_OFF":
+      return {
+        icon: <Square className="h-3 w-3" />,
+        label: "Maint. Off",
+        cls: "bg-orange-700 text-white border-orange-800 ring-orange-500/30 shadow-sm shadow-orange-300",
+      };
     case "KEY_ON":
       return {
         icon: <Key className="h-3 w-3" />,
@@ -222,9 +234,11 @@ function LabelBadge({
 function DurationChip({
   durationText,
   varianceColor,
+  className,
 }: {
   durationText?: string | undefined;
   varianceColor?: "red" | "green" | "neutral" | undefined;
+  className?: string | undefined;
 }) {
   if (!durationText) return <span className="text-slate-300 text-xs">—</span>;
   const cls =
@@ -236,8 +250,9 @@ function DurationChip({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 px-2.5 py-[3px] rounded-full font-mono text-[11px] font-semibold border",
+        "inline-flex items-center gap-1.5 px-3 py-[4px] rounded-full font-mono text-[11px] font-semibold border",
         cls,
+        className
       )}
     >
       <Clock className="h-2.5 w-2.5 opacity-60 flex-shrink-0" />
@@ -432,26 +447,27 @@ function SummaryCell({ row }: { row: ReportRow }) {
     return <span className="text-slate-300 text-xs">—</span>;
 
   return (
-    <div className="flex flex-col gap-1 min-w-0">
-      {row.durationText && (
-        <DurationChip
-          durationText={row.durationText ?? undefined}
-          varianceColor={row.varianceColor ?? undefined}
-        />
-      )}
+    <div className="flex flex-col gap-1.5 min-w-0 pr-4 mt-0.5">
       {row.summary && (
         <span
           className={cn(
-            "text-xs font-medium leading-snug",
+            "inline-flex items-center px-2 py-0.5 rounded text-[10.5px] font-bold border w-fit",
             row.varianceColor === "red"
-              ? "text-rose-600"
+              ? "bg-rose-50 border-rose-200 text-rose-600"
               : row.varianceColor === "green"
-                ? "text-emerald-700"
-                : "text-slate-600",
+                ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                : "bg-slate-50 border-slate-200 text-slate-600",
           )}
         >
           {row.summary}
         </span>
+      )}
+      {row.durationText && (
+        <DurationChip
+          durationText={row.durationText ?? undefined}
+          varianceColor={row.varianceColor ?? undefined}
+          className="w-full max-w-[200px]"
+        />
       )}
     </div>
   );
@@ -637,60 +653,6 @@ function WoSummaryRow({ row }: { row: ReportRow }) {
   );
 }
 
-/* ─── Pause Banner ───────────────────────────────────────────────────────── */
-
-function PauseBannerRow({ row }: { row: ReportRow }) {
-  const p = row.pauseBannerData!;
-  const isBreak = p.isShiftBreak;
-  return (
-    <tr>
-      <td colSpan={10} className="p-0">
-        <div
-          className={cn(
-            "flex items-center gap-3 px-5 py-2.5 border-y",
-            isBreak
-              ? "bg-rose-50 border-rose-200"
-              : "bg-amber-50 border-amber-200",
-          )}
-        >
-          <span
-            className={cn(
-              "flex items-center justify-center w-7 h-7 rounded-full text-sm flex-shrink-0",
-              isBreak ? "bg-rose-100" : "bg-amber-100",
-            )}
-          >
-            {isBreak ? "🔴" : "⚠️"}
-          </span>
-          <div>
-            <div
-              className={cn(
-                "text-[10px] font-bold uppercase tracking-widest",
-                isBreak ? "text-rose-700" : "text-amber-800",
-              )}
-            >
-              {isBreak ? "Shift Break" : "WO Pause"}
-            </div>
-            <div className="flex items-center gap-2 text-[11px] mt-0.5">
-              <span
-                className={cn(
-                  "font-medium",
-                  isBreak ? "text-rose-600" : "text-amber-700",
-                )}
-              >
-                {fmt(p.reason)}
-              </span>
-              <span className="text-slate-400">·</span>
-              <span className="font-mono font-bold text-slate-700">
-                ⏲ {p.durationText}
-              </span>
-            </div>
-          </div>
-        </div>
-      </td>
-    </tr>
-  );
-}
-
 /* ─── Table Head ─────────────────────────────────────────────────────────── */
 
 function TableHead() {
@@ -740,7 +702,9 @@ interface ReportTableProps {
 }
 
 export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
-  if (rows.length === 0) {
+  const visibleRows = rows.filter((row) => !row.isPauseBanner);
+
+  if (visibleRows.length === 0) {
     if (isFiltered)
       return (
         <div className="w-full h-24 flex items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/70 text-sm text-slate-400">
@@ -764,7 +728,7 @@ export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
         <table className="w-full min-w-[1060px] text-sm text-left border-collapse">
           <TableHead />
           <tbody>
-            {rows.map((row, idx) => {
+            {visibleRows.map((row, idx) => {
               /* ── WO Header ── */
               if (row.isWoHeader && row.woHeaderData)
                 return <WoHeaderRow key={row.rowId} row={row} />;
@@ -773,19 +737,15 @@ export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
               if (row.isWoSummary && row.woSummaryData)
                 return <WoSummaryRow key={row.rowId} row={row} />;
 
-              /* ── Pause Banner ── */
-              if (row.isPauseBanner && row.pauseBannerData)
-                return <PauseBannerRow key={row.rowId} row={row} />;
-
               /* ── Regular Data Row ── */
               const isFirstInBlock =
                 !!row.jobBlockLabel &&
                 (idx === 0 ||
-                  rows[idx - 1]?.jobBlockLabel !== row.jobBlockLabel);
+                  visibleRows[idx - 1]?.jobBlockLabel !== row.jobBlockLabel);
               const isLastInBlock =
                 !!row.jobBlockLabel &&
-                (idx === rows.length - 1 ||
-                  rows[idx + 1]?.jobBlockLabel !== row.jobBlockLabel);
+                (idx === visibleRows.length - 1 ||
+                  visibleRows[idx + 1]?.jobBlockLabel !== row.jobBlockLabel);
               const isInBlock = !!row.jobBlockLabel;
 
               /* ── Per-action left accent colour ── */
@@ -802,6 +762,10 @@ export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
                           ? "border-l-[3px] border-l-teal-400"
                           : row.action === "SPINDLE_OFF"
                             ? "border-l-[3px] border-l-slate-400"
+                            : row.action === "MTR_ON"
+                              ? "border-l-[3px] border-l-orange-400"
+                              : row.action === "MTR_OFF"
+                                ? "border-l-[3px] border-l-orange-600"
                             : row.action === "KEY_ON" ||
                               row.action === "KEY_OFF"
                               ? "border-l-[3px] border-l-cyan-400"
@@ -818,6 +782,8 @@ export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
                     ? "bg-rose-50/40"
                     : row.action === "WO_PAUSE" || row.action === "WO_RESUME"
                       ? "bg-amber-50/50"
+                      : row.action === "MTR_ON" || row.action === "MTR_OFF"
+                        ? "bg-orange-50/40"
                       : row.action === "KEY_ON" || row.action === "KEY_OFF"
                         ? "bg-cyan-50/40"
                         : row.isComputed

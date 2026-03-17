@@ -90,6 +90,61 @@ test("Setting Job (Type 2) should NOT be grouped into sub-jobs", () => {
 });
 
 test.each([
+    [JobType.SETTING, "Setting"],
+    [JobType.CALIBRATION, "Calibration"],
+    [JobType.MAINTENANCE, "Maintenance"],
+])("Dashboard keeps all raw logs for non-production job type %s", (jobType, expectedJobType) => {
+    const woId = 300 + Number(jobType);
+    const logs: DeviceLogEntry[] = [
+        createLog(3000 + Number(jobType), "2026-02-18T14:00:00Z", jobType === JobType.MAINTENANCE ? "MTR_ON" : "WO_START", woId, jobType),
+        createLog(3010 + Number(jobType), "2026-02-18T14:01:00Z", "SPINDLE_ON", woId),
+        createLog(3020 + Number(jobType), "2026-02-18T14:03:00Z", "SPINDLE_OFF", woId),
+        createLog(3030 + Number(jobType), "2026-02-18T14:07:00Z", jobType === JobType.MAINTENANCE ? "MTR_OFF" : "WO_STOP", woId, jobType),
+    ];
+
+    const woDetails = new Map<number, WoDetails>();
+    woDetails.set(woId, {
+        id: woId,
+        wo_id_str: String(woId),
+        part_no: `PART-${jobType}`,
+        pcl: null,
+        start_time: "2026-02-18T14:00:00Z",
+        end_time: "2026-02-18T14:07:00Z",
+        duration: 420,
+        alloted_qty: 0,
+        ok_qty: 0,
+        reject_qty: 0,
+        device_id: 1,
+        setting: "",
+        start_name: "Op1",
+        stop_name: "Op1",
+        start_comment: `${expectedJobType} start`,
+        stop_comment: `${expectedJobType} stop`,
+        extensions: [],
+        start_uid: null,
+        stop_uid: null,
+        job_type: Number(jobType),
+    });
+
+    const report = buildReport(logs, woDetails, config);
+    const dashboardRows = report.rows.filter((row) => !row.excludeFromDashboard);
+    const dashboardLogIds = dashboardRows
+        .map((row) => row.logId)
+        .filter((logId): logId is number => typeof logId === "number");
+
+    expect(dashboardLogIds).toContain(3010 + Number(jobType));
+    expect(dashboardLogIds).toContain(3020 + Number(jobType));
+
+    if (jobType === JobType.MAINTENANCE) {
+        expect(dashboardLogIds).toContain(3000 + Number(jobType));
+        expect(dashboardLogIds).toContain(3030 + Number(jobType));
+    }
+
+    const exportOnlyJobBlock = report.rows.find((row) => row.isJobBlock && row.excludeFromDashboard);
+    expect(exportOnlyJobBlock?.jobType).toBe(expectedJobType);
+});
+
+test.each([
     [JobType.CALIBRATION, "Calibration", "CALIBRATION PROCESS"],
     [JobType.MAN, "Man", "MAN PROCESS"],
     [JobType.TRAINING, "Training", "TRAINING PROCESS"],

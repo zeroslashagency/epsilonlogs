@@ -95,7 +95,12 @@ export interface ExcelExportInput {
     woDetailsMap: Map<number, WoDetails>;
     deviceNameMap: Map<number, string>;
     filename?: string;
-    reportConfig?: Pick<ReportConfig, 'deviceId' | 'startDate' | 'endDate'>;
+    reportConfig?: Pick<ReportConfig, 'startDate' | 'endDate'> & {
+        deviceId?: number;
+        deviceIds?: number[];
+        scopeLabel?: string;
+    };
+    analysisTitle?: string;
 }
 
 const LOG_SHEET_COLUMN_WIDTHS = [
@@ -1139,7 +1144,9 @@ export function buildGroupedExportRows(
     rows: ReportRow[],
     woDetailsMap: Map<number, WoDetails>,
 ): GroupedExportRow[] {
-    const sortedRows = [...rows].sort((a, b) => a.timestamp - b.timestamp);
+    const sortedRows = rows
+        .filter((row) => !row.excludeFromExport)
+        .sort((a, b) => a.timestamp - b.timestamp);
     const exportRows: GroupedExportRow[] = [];
     let serialNo = 1;
     let pendingWoStop: ReportRow | null = null;
@@ -1199,9 +1206,12 @@ export function buildGroupedExportRows(
             const serial = typeof row.logId === 'number' ? serialNo++ : '';
             const woDetails = resolveWoDetails(row, woDetailsMap);
             const jobTypeLabel = row.jobType || '';
+            const jobTypeCode = woDetails?.job_type;
 
             const jobName = (row.label || 'PROCESS').toUpperCase().replace(' PROCESS', '');
-            const jobColumnText = jobTypeLabel;
+            const jobColumnText = (jobTypeCode !== undefined && jobTypeCode !== 1)
+                ? `${jobTypeCode}: ${jobTypeLabel}`
+                : jobTypeLabel;
 
             // Row 1: START
             const startBase = buildGroupedBaseRow(row, serial, woDetailsMap);
@@ -1831,18 +1841,59 @@ function resolveGroupedSummaryRange(rows: ReportRow[], reportConfig?: Pick<Repor
     };
 }
 
+function computeIdealTimeSeconds(rows: ReportRow[]): number {
+    const sorted = [...rows]
+        .filter((r) => typeof r.logId === 'number' &&
+            (r.action === 'WO_STOP' || r.action === 'WO_START'))
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+    let total = 0;
+    let lastStop: ReportRow | null = null;
+    for (const row of sorted) {
+        if (row.action === 'WO_STOP') {
+            lastStop = row;
+        } else if (row.action === 'WO_START' && lastStop) {
+            const gap = Math.max(0, Math.round((row.timestamp - lastStop.timestamp) / 1000));
+            total += gap;
+            lastStop = null;
+        }
+    }
+    return total;
+}
+
 function addGroupedEndSummaryBlock(worksheet: Worksheet, input: ExcelExportInput): void {
     const blockStartRow = worksheet.rowCount + 2;
     const range = resolveGroupedSummaryRange(input.rows, input.reportConfig);
     const inputWindowSec = computeInputWindowSeconds(input.reportConfig);
     const inputTotalSec = inputWindowSec ?? Math.max(0, Math.round(input.stats.totalWoDurationSec || 0));
     const keyActiveSec = computeKeyActiveSeconds(input.rows);
+    const idealTimeSec = computeIdealTimeSeconds(input.rows);         // WO gap (visible in grouped rows)
+    const idleSec = Math.max(0, Math.round(input.stats.totalIdleSec || 0)); // Idle/Break > 15 min within WO
+
     const classifiedSec = Math.max(0, Math.round(input.stats.totalCuttingSec || 0))
         + Math.max(0, Math.round(input.stats.totalLoadingUnloadingSec || 0))
         + Math.max(0, Math.round(input.stats.totalPauseSec || 0))
-        + keyActiveSec;
+        + keyActiveSec
+        + idleSec
+        + idealTimeSec;
+
     const remainingSec = inputTotalSec - classifiedSec;
     const status = remainingSec === 0 ? 'OK' : 'CHECK';
+
+    // Totals for jobs / qty
+    const totalJobs = input.stats.totalJobs;
+    const totalCycles = input.stats.totalCycles;
+    const totalOkQty = input.stats.totalOkQty;
+    const totalRejectQty = input.stats.totalRejectQty;
+
+    const notesText = [
+        `Key: ${formatSecondsToClockPadded(keyActiveSec)}`,
+        `Idle: ${formatSecondsToClockPadded(idleSec)}`,
+        `Gap: ${formatSecondsToClockPadded(idealTimeSec)}`,
+        `Cls: ${formatSecondsToClockPadded(classifiedSec)}`,
+        `Rem: ${formatSignedSecondsToClock(remainingSec)}`,
+        `Jobs: ${totalJobs} | Cyc: ${totalCycles} | OK: ${totalOkQty} | Rej: ${totalRejectQty}`,
+    ].join(' | ');
 
     const summaryRow: GroupedLogsSheetRow = {
         'S.No': '',
@@ -1852,12 +1903,12 @@ function addGroupedEndSummaryBlock(worksheet: Worksheet, input: ExcelExportInput
         TIME: `Cutting: ${formatSecondsToClockPadded(input.stats.totalCuttingSec)}`,
         PLC: `Loading: ${formatSecondsToClockPadded(input.stats.totalLoadingUnloadingSec)}`,
         JOB: `Pause: ${formatSecondsToClockPadded(input.stats.totalPauseSec)}`,
-        Notes: `Key: ${formatSecondsToClockPadded(keyActiveSec)} | Cls: ${formatSecondsToClockPadded(classifiedSec)} | Rem: ${formatSignedSecondsToClock(remainingSec)}`,
+        Notes: notesText,
         OP: status,
     };
 
     const row = worksheet.insertRow(blockStartRow, summaryRow);
-    row.height = 26;
+    row.height = 40;
     row.getCell(1).value = 'END SUMMARY';
     row.getCell(2).value = 'RPT';
 
@@ -1870,7 +1921,7 @@ function addGroupedEndSummaryBlock(worksheet: Worksheet, input: ExcelExportInput
         cell.alignment = {
             vertical: 'middle',
             horizontal: col === 3 || col === 4 || col === 8 ? 'left' : 'center',
-            wrapText: false,
+            wrapText: col === 8,
         };
         cell.border = {
             top: { style: 'thin', color: { argb: LOG_STYLE_COLORS.gridLine } },
@@ -1958,7 +2009,9 @@ export function buildLogsSheetRows(
     woDetailsMap: Map<number, WoDetails>,
     deviceNameMap: Map<number, string>
 ): LogsSheetRow[] {
-    return rows.map((row) => mapReportRowToLogsSheetRow(row, woDetailsMap, deviceNameMap));
+    return rows
+        .filter((row) => !row.excludeFromExport)
+        .map((row) => mapReportRowToLogsSheetRow(row, woDetailsMap, deviceNameMap));
 }
 
 function resolveRowVisual(row: ReportRow, groupMeta: JobGroupMeta): ExportRowVisual {
@@ -2302,6 +2355,21 @@ function styleTableBodyRow(row: Row, rightAlignedColumns: number[]): void {
 }
 
 function resolveDevicesLabel(input: ExcelExportInput): string {
+    if (typeof input.reportConfig?.scopeLabel === 'string' && input.reportConfig.scopeLabel.trim()) {
+        return input.reportConfig.scopeLabel.trim();
+    }
+
+    if (Array.isArray(input.reportConfig?.deviceIds) && input.reportConfig.deviceIds.length > 0) {
+        return input.reportConfig.deviceIds
+            .map((deviceId) => {
+                const deviceName = input.deviceNameMap.get(deviceId);
+                return deviceName
+                    ? `${deviceName} (${deviceId})`
+                    : `Device ${deviceId}`;
+            })
+            .join(', ');
+    }
+
     if (typeof input.reportConfig?.deviceId === 'number') {
         const deviceName = input.deviceNameMap.get(input.reportConfig.deviceId);
         return deviceName
@@ -2340,7 +2408,7 @@ function addAnalysisSheet(workbook: Workbook, input: ExcelExportInput): void {
         { width: 14 },
     ];
 
-    worksheet.getCell('A1').value = 'Device Logs Analysis';
+    worksheet.getCell('A1').value = input.analysisTitle || 'Device Logs Analysis';
     worksheet.getCell('A1').font = { size: 16, bold: true, color: { argb: LOG_STYLE_COLORS.darkText } };
 
     worksheet.getCell('A3').value = 'Generated On';

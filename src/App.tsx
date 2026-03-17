@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 
 const ProductionHubV2 = lazy(() => import("./hub-v2/ProductionHubV2"));
 const ReportPage = lazy(() => import("./report/ReportPage"));
+const PersonnelReportPage = lazy(() => import("./report/PersonnelReportPage"));
 
 function PageLoader() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="/" element={<ProductionHubV2 />} />
           <Route path="/dashboard" element={<ProductionHubV2 />} />
           <Route path="/report" element={<ReportPage />} />
+          <Route path="/report/personnel" element={<PersonnelReportPage />} />
         </Routes>
       </Suspense>
     </Router>

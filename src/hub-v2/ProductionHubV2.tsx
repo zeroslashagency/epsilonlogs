@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import {
   fetchDeviceLogs,
+  fetchDeviceNameMap,
   fetchWoDetails,
   formatDateForApi,
 } from "../report/api-client";
@@ -40,13 +41,18 @@ import {
   ExpandableTrigger,
 } from "@/components/ui/expandable";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { WoReportPanel } from "./WoReportPanel";
+import {
+  DEFAULT_DASHBOARD_MACHINE_IDS,
+  mergeMachineIds,
+  parseManualMachineId,
+} from "./wo-report-utils";
 
 const TOKEN = import.meta.env.VITE_API_TOKEN;
 const REFRESH_INTERVAL_MS = 30000;
 const OVERVIEW_CACHE_TTL_MS = 45000;
 const WO_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
 const LIVE_WINDOW_MS = 15 * 60 * 1000;
-const MACHINE_IDS = [15, 16, 17, 18] as const;
 const TOP_WO_LIMIT = 12;
 
 type RangePreset = "DAY" | "LAST_3_DAYS" | "LAST_7_DAYS" | "LAST_30_DAYS";
@@ -360,6 +366,14 @@ export default function ProductionHubV2() {
   const [shiftPreset, setShiftPreset] = useState<ShiftPreset>("ALL");
   const [machineScope, setMachineScope] = useState<MachineScope>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
+  const [deviceNameMap, setDeviceNameMap] = useState<Map<number, string>>(
+    new Map(),
+  );
+  const [customMachineIds, setCustomMachineIds] = useState<number[]>([]);
+  const [manualMachineInput, setManualMachineInput] = useState("");
+  const [manualMachineError, setManualMachineError] = useState<string | null>(
+    null,
+  );
 
   const [allRows, setAllRows] = useState<ReportRow[]>([]);
   const [woDetailsById, setWoDetailsById] = useState<Map<number, WoDetails>>(
@@ -378,6 +392,12 @@ export default function ProductionHubV2() {
     new Map(),
   );
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const activeMachineIds = useMemo(
+    () =>
+      mergeMachineIds(DEFAULT_DASHBOARD_MACHINE_IDS, customMachineIds),
+    [customMachineIds],
+  );
 
   const filteredRows = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -589,8 +609,8 @@ export default function ProductionHubV2() {
       };
     }
 
-    const latestRow = selectedWoRows[0];
-    const oldestRow = selectedWoRows[selectedWoRows.length - 1];
+    const latestRow = selectedWoRows[0]!;
+    const oldestRow = selectedWoRows[selectedWoRows.length - 1]!;
     const woStartRow = [...selectedWoRows]
       .reverse()
       .find((row) => row.action === "WO_START");
@@ -667,13 +687,14 @@ export default function ProductionHubV2() {
       const now = Date.now();
       const cached = woDetailsCacheRef.current.get(woIdNum);
       if (cached && now - cached.fetchedAt <= WO_DETAIL_CACHE_TTL_MS) {
-        if (cached.data) {
+        const cachedData = cached.data;
+        if (cachedData) {
           setWoDetailsById((prev) => {
             if (prev.has(woIdNum)) {
               return prev;
             }
             const next = new Map(prev);
-            next.set(woIdNum, cached.data);
+            next.set(woIdNum, cachedData);
             return next;
           });
         }
@@ -742,7 +763,7 @@ export default function ProductionHubV2() {
       return;
     }
 
-    const cacheKey = `${rangePreset}|${shiftPreset}|${machineScope}`;
+    const cacheKey = `${rangePreset}|${shiftPreset}|${machineScope}|${activeMachineIds.join(",")}`;
     const nowTimestamp = Date.now();
     const cachedOverview = overviewCacheRef.current.get(cacheKey);
     if (
@@ -767,7 +788,7 @@ export default function ProductionHubV2() {
       });
 
       const deviceLogResults = await Promise.allSettled(
-        MACHINE_IDS.map(async (deviceId) => {
+        activeMachineIds.map(async (deviceId) => {
           const logs = await fetchDeviceLogs(
             configForDevice(deviceId),
             TOKEN,
@@ -798,7 +819,10 @@ export default function ProductionHubV2() {
           : logsByDevice.get(machineScope) || [];
 
       const report = buildReportV2(scopeLogs, new Map(), {
-        deviceId: machineScope === "ALL" ? MACHINE_IDS[0] : machineScope,
+        deviceId:
+          machineScope === "ALL"
+            ? activeMachineIds[0] || DEFAULT_DASHBOARD_MACHINE_IDS[0]
+            : machineScope,
         startDate: formatDateForApi(startWindow),
         endDate: formatDateForApi(now),
         toleranceSec: 10,
@@ -853,7 +877,7 @@ export default function ProductionHubV2() {
       void fetchData();
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(intervalId);
-  }, [rangePreset, shiftPreset, machineScope]);
+  }, [activeMachineIds, machineScope, rangePreset, shiftPreset]);
 
   useEffect(() => {
     if (!selectedWoId || detailStage < 2) {
@@ -862,12 +886,69 @@ export default function ProductionHubV2() {
     void ensureWoDetailsLoaded(selectedWoId);
   }, [detailStage, ensureWoDetailsLoaded, selectedWoId]);
 
+  useEffect(() => {
+    if (machineScope === "ALL") {
+      return;
+    }
+
+    if (!activeMachineIds.includes(machineScope)) {
+      setMachineScope("ALL");
+    }
+  }, [activeMachineIds, machineScope]);
+
+  useEffect(() => {
+    if (!TOKEN) {
+      return;
+    }
+
+    let ignore = false;
+    fetchDeviceNameMap(TOKEN)
+      .then((nextDeviceNameMap) => {
+        if (!ignore) {
+          setDeviceNameMap(nextDeviceNameMap);
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setDeviceNameMap(new Map());
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
   const selectedWoGoodRate =
     selectedWoCard && selectedWoCard.totalCycles > 0
       ? Math.round(
           (selectedWoCard.goodCycles / selectedWoCard.totalCycles) * 100,
         )
       : 0;
+
+  const addManualMachine = () => {
+    const parsedMachineId = parseManualMachineId(manualMachineInput);
+    if (!parsedMachineId) {
+      setManualMachineError("Enter a valid numeric machine ID.");
+      return;
+    }
+
+    if (activeMachineIds.includes(parsedMachineId)) {
+      setManualMachineError(`Machine ${parsedMachineId} is already active.`);
+      return;
+    }
+
+    setCustomMachineIds((prev) => [...prev, parsedMachineId]);
+    setManualMachineInput("");
+    setManualMachineError(null);
+  };
+
+  const removeManualMachine = (machineIdToRemove: number) => {
+    setCustomMachineIds((prev) =>
+      prev.filter((machineId) => machineId !== machineIdToRemove),
+    );
+    setManualMachineError(null);
+  };
 
   const closeOverlay = () => {
     setIsOverlayOpen(false);
@@ -1020,8 +1101,12 @@ export default function ProductionHubV2() {
                 className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 sm:text-sm"
               >
                 <option value="ALL">All Machines</option>
-                {MACHINE_IDS.map((id) => (
-                  <option key={id} value={id}>{`Machine ${id}`}</option>
+                {activeMachineIds.map((id) => (
+                  <option key={id} value={id}>
+                    {deviceNameMap.get(id)
+                      ? `${deviceNameMap.get(id)} (${id})`
+                      : `Machine ${id}`}
+                  </option>
                 ))}
               </select>
 
@@ -1050,6 +1135,88 @@ export default function ProductionHubV2() {
 
             <div className="mt-2 text-xs text-slate-500">
               Live: {compactTime(lastRefreshed)}
+            </div>
+
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    Dashboard Machines
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Core machines stay active. Add any extra machine ID manually for
+                    dashboard coverage.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    value={manualMachineInput}
+                    onChange={(event) => {
+                      setManualMachineInput(event.target.value);
+                      if (manualMachineError) {
+                        setManualMachineError(null);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addManualMachine();
+                      }
+                    }}
+                    placeholder="Add machine ID"
+                    className="h-9 w-[150px] rounded-xl border border-slate-200 bg-white px-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-slate-300 focus:outline-none sm:text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={addManualMachine}
+                    className="inline-flex h-9 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-100 sm:text-sm"
+                  >
+                    Add Machine
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {activeMachineIds.map((machineId) => {
+                  const isCustomMachine = customMachineIds.includes(machineId);
+                  const machineLabel = deviceNameMap.get(machineId);
+
+                  return (
+                    <span
+                      key={machineId}
+                      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+                        isCustomMachine
+                          ? "border-cyan-200 bg-cyan-50 text-cyan-700"
+                          : "border-slate-200 bg-white text-slate-700"
+                      }`}
+                    >
+                      <span className="font-semibold">
+                        {machineLabel
+                          ? `${machineLabel} (${machineId})`
+                          : `Machine ${machineId}`}
+                      </span>
+                      <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                        {isCustomMachine ? "manual" : "core"}
+                      </span>
+                      {isCustomMachine ? (
+                        <button
+                          type="button"
+                          onClick={() => removeManualMachine(machineId)}
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                          aria-label={`Remove machine ${machineId}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      ) : null}
+                    </span>
+                  );
+                })}
+              </div>
+
+              {manualMachineError ? (
+                <p className="mt-2 text-xs text-rose-600">{manualMachineError}</p>
+              ) : null}
             </div>
           </section>
 
@@ -1120,7 +1287,9 @@ export default function ProductionHubV2() {
                         </div>
 
                         <p className="text-lg font-semibold text-slate-800">{`WO-${card.woDisplayId}`}</p>
-                        <p className="mt-1 text-xs text-slate-500">{`Machine ${card.machineId ?? "-"} · ${card.operatorName}`}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {`${card.machineId != null ? deviceNameMap.get(card.machineId) || `Machine ${card.machineId}` : "Machine -"} · ${card.operatorName}`}
+                        </p>
 
                         <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
                           <p className="text-slate-500">PCL Time</p>
@@ -1259,20 +1428,12 @@ export default function ProductionHubV2() {
                   1. WO Overview
                 </button>
                 <span
-                  className={`rounded-full px-3 py-1 ${
-                    detailStage === 2
-                      ? "bg-slate-900 text-white"
-                      : "border border-slate-200 bg-white text-slate-600"
-                  }`}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-600"
                 >
                   2. WO Summary
                 </span>
                 <span
-                  className={`rounded-full px-3 py-1 ${
-                    detailStage === 3
-                      ? "bg-slate-900 text-white"
-                      : "border border-slate-200 bg-white text-slate-600"
-                  }`}
+                  className="rounded-full bg-slate-900 px-3 py-1 text-white"
                 >
                   3. WO Logs
                 </span>
@@ -1292,7 +1453,9 @@ export default function ProductionHubV2() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xl font-semibold text-slate-800">{`WO-${selectedWoCard.woDisplayId}`}</p>
-                  <p className="mt-1 text-sm text-slate-600">{`Machine ${selectedWoCard.machineId ?? "-"} · ${selectedWoCard.operatorName}`}</p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {`${selectedWoCard.machineId != null ? deviceNameMap.get(selectedWoCard.machineId) || `Machine ${selectedWoCard.machineId}` : "Machine -"} · ${selectedWoCard.operatorName}`}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <span
@@ -1309,84 +1472,24 @@ export default function ProductionHubV2() {
               </div>
             </div>
 
-            <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-base font-semibold text-slate-800">
-                  WO Logs
-                </h2>
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">
-                  Stage 3
-                </span>
-              </div>
-
-              <div className="mb-3 flex items-center justify-between text-xs text-slate-500">
-                <p>{`WO-${selectedWoCard.woDisplayId}`}</p>
-                <p>{`Total rows: ${selectedWoRows.length}`}</p>
-              </div>
-
-              <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-slate-200">
-                <table className="w-full min-w-[760px] text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-500">
-                    <tr>
-                      <th className="px-3 py-2">Time</th>
-                      <th className="px-3 py-2">Action</th>
-                      <th className="px-3 py-2">Duration</th>
-                      <th className="px-3 py-2">Class</th>
-                      <th className="px-3 py-2">Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedWoRows.map((row) => {
-                      const rowClassification: RowClassification =
-                        row.classification || "UNKNOWN";
-                      const rowLabel =
-                        row.action || row.label || row.summary || "EVENT";
-                      return (
-                        <tr
-                          key={row.rowId}
-                          className="border-t border-slate-100 text-slate-700"
-                        >
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            {row.logTime.toLocaleString("en-GB")}
-                          </td>
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            {rowLabel}
-                          </td>
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            {row.durationText || "-"}
-                          </td>
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            <span
-                              className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${classificationBadgeClass[rowClassification]}`}
-                            >
-                              {rowClassification}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2">{row.reasonText || "-"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={backToSummary}
-                  className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50"
-                >
-                  Back To Summary
-                </button>
-                <Link
-                  to="/report"
-                  className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Open /report
-                </Link>
-              </div>
-            </div>
+            <WoReportPanel
+              key={selectedWoCard.woId}
+              token={TOKEN}
+              woId={selectedWoCard.woId}
+              woDisplayId={selectedWoCard.woDisplayId}
+              machineId={selectedWoCard.machineId}
+              operatorName={selectedWoCard.operatorName}
+              jobType={selectedWoCard.jobType}
+              executionStatus={selectedWoCard.executionStatus}
+              executionStatusClassName={
+                executionStatusBadgeClass[selectedWoCard.executionStatus]
+              }
+              jobTypeClassName={getJobTypeBadgeClass(selectedWoCard.jobType)}
+              fallbackRows={selectedWoRows}
+              woDetails={selectedWoDetails}
+              deviceNameMap={deviceNameMap}
+              onBack={backToSummary}
+            />
           </div>
         </div>
       ) : null}

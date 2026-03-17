@@ -217,6 +217,8 @@ export interface ReportRow {
     varianceColor?: "red" | "green" | "neutral" | undefined;
     isComputed?: boolean | undefined;       // Ideal Time, Loading, Idle — skip S.No
     isEstimated?: boolean | undefined;       // Estimated data (no spindle sensor)
+    excludeFromDashboard?: boolean;
+    excludeFromExport?: boolean;
 
     // Special row types
     isWoHeader?: boolean;

@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:sample": "tsx scripts/check-sample.ts",
-    "preview:grouped-colors": "tsx scripts/preview-grouped-job-colors.ts"
+    "preview:grouped-colors": "tsx scripts/preview-grouped-job-colors.ts",
+    "compare:report-apis": "tsx scripts/compare-report-apis.ts",
+    "bench:report-strategies": "tsx scripts/benchmark-report-strategies.ts"
   },
   "dependencies": {
     "@types/react-router-dom": "^5.3.3",

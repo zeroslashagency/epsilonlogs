@@ -13,6 +13,7 @@ import {
   User,
   Tag,
   Briefcase,
+  Monitor,
   SlidersHorizontal,
   Search,
   CheckCheck,
@@ -21,6 +22,7 @@ import {
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import type { ReportRow } from "./report-types";
+import { getMachineLabel } from "./machine-config";
 
 /* ─── Utils ──────────────────────────────────────────────────────────────── */
 
@@ -35,6 +37,7 @@ export interface ReportFilters {
   jobTypes: string[];
   operators: string[];
   labels: string[];
+  machines: string[];
 }
 
 export const EMPTY_FILTERS: ReportFilters = {
@@ -42,6 +45,7 @@ export const EMPTY_FILTERS: ReportFilters = {
   jobTypes: [],
   operators: [],
   labels: [],
+  machines: [],
 };
 
 export function isFiltersEmpty(f: ReportFilters): boolean {
@@ -49,7 +53,8 @@ export function isFiltersEmpty(f: ReportFilters): boolean {
     f.actions.length === 0 &&
     f.jobTypes.length === 0 &&
     f.operators.length === 0 &&
-    f.labels.length === 0
+    f.labels.length === 0 &&
+    f.machines.length === 0
   );
 }
 
@@ -457,6 +462,7 @@ interface ReportFilterBarProps {
   availableJobTypes: string[];
   availableOperators: string[];
   availableLabels: string[];
+  availableMachines: string[];
   totalRows: number;
   filteredRows: number;
   searchQuery: string;
@@ -473,6 +479,7 @@ export function ReportFilterBar({
   availableJobTypes,
   availableOperators,
   availableLabels,
+  availableMachines,
   totalRows,
   filteredRows,
   searchQuery,
@@ -487,7 +494,8 @@ export function ReportFilterBar({
     filters.actions.length +
     filters.jobTypes.length +
     filters.operators.length +
-    filters.labels.length;
+    filters.labels.length +
+    filters.machines.length;
 
   const removePill = (key: keyof ReportFilters, value: string) => {
     onChange({
@@ -632,6 +640,18 @@ export function ReportFilterBar({
           />
         )}
 
+        {availableMachines.length > 0 && (
+          <MultiSelectDropdown
+            label="Machine"
+            icon={<Monitor className="h-3.5 w-3.5" />}
+            options={availableMachines}
+            selected={filters.machines}
+            onChange={(v) => onChange({ ...filters, machines: v })}
+            accentColor="indigo"
+            disabled={disabled}
+          />
+        )}
+
         {/* ── Spacer ── */}
         <div className="flex-1 min-w-0" />
 
@@ -766,6 +786,24 @@ export function ReportFilterBar({
             </span>
           ))}
 
+          {/* Machine pills */}
+          {filters.machines.map((v) => (
+            <span
+              key={`mc-${v}`}
+              className="inline-flex items-center gap-1.5 pl-2 pr-1 py-0.5 rounded-full text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200"
+            >
+              <Monitor className="h-2.5 w-2.5 flex-shrink-0" />
+              {v}
+              <button
+                onClick={() => removePill("machines", v)}
+                className="p-0.5 rounded-full hover:bg-blue-200/50 transition-colors"
+                aria-label={`Remove machine filter: ${v}`}
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            </span>
+          ))}
+
           {/* Applied count */}
           <span className="ml-auto inline-flex items-center gap-1 text-[10px] text-indigo-500 font-semibold select-none">
             <CheckCheck className="h-3 w-3" />
@@ -784,11 +822,13 @@ export function extractFilterOptions(rows: ReportRow[]): {
   jobTypes: string[];
   operators: string[];
   labels: string[];
+  machines: string[];
 } {
   const actions = new Set<string>();
   const jobTypes = new Set<string>();
   const operators = new Set<string>();
   const labels = new Set<string>();
+  const machines = new Set<string>();
 
   for (const row of rows) {
     if (row.isWoHeader || row.isWoSummary || row.isPauseBanner) continue;
@@ -797,6 +837,10 @@ export function extractFilterOptions(rows: ReportRow[]): {
       jobTypes.add(String(row.jobType));
     if (row.operatorName) operators.add(row.operatorName);
     if (row.label) labels.add(row.label);
+    const deviceId = row.originalLog?.device_id ?? row.woHeaderData?.deviceId;
+    if (typeof deviceId === 'number' && deviceId > 0) {
+      machines.add(getMachineLabel(deviceId));
+    }
   }
 
   // Canonical action order
@@ -820,6 +864,7 @@ export function extractFilterOptions(rows: ReportRow[]): {
     jobTypes: Array.from(jobTypes).sort(),
     operators: Array.from(operators).sort(),
     labels: Array.from(labels).sort(),
+    machines: Array.from(machines).sort(),
   };
 }
 
@@ -860,6 +905,13 @@ export function applyFilters(
     // Label filter — only apply when the row has a label
     if (pass && filters.labels.length > 0) {
       if (!row.label || !filters.labels.includes(row.label)) pass = false;
+    }
+
+    // Machine filter — match by getMachineLabel of the row's device_id
+    if (pass && filters.machines.length > 0) {
+      const deviceId = row.originalLog?.device_id;
+      const machineLabel = typeof deviceId === 'number' ? getMachineLabel(deviceId) : null;
+      if (!machineLabel || !filters.machines.includes(machineLabel)) pass = false;
     }
 
     if (pass) {
