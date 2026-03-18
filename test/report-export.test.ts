@@ -50,6 +50,7 @@ const makeStats = (): ReportStats => ({
   woBreakdowns: [
     {
       woId: '2839',
+      deviceId: 15,
       partNo: 'MET002',
       operator: 'RamaKrishnan',
       setting: 'SETTING -1',

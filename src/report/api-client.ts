@@ -17,6 +17,18 @@ interface DevicesApiResponse {
   };
 }
 
+export interface DeviceLogsFetchProgress {
+  deviceId: number;
+  completedPages: number;
+  totalPages: number;
+}
+
+export interface WoDetailsFetchProgress {
+  completed: number;
+  total: number;
+  woId: number;
+}
+
 /**
  * Internal: fetches a single page of device logs.
  */
@@ -72,9 +84,18 @@ export async function fetchDeviceLogs(
   config: ReportConfig,
   token: string,
   signal?: AbortSignal,
+  onProgress?: (progress: DeviceLogsFetchProgress) => void,
 ): Promise<DeviceLogEntry[]> {
   // 1. Fetch page 1 to discover total_pages
   const first = await fetchDeviceLogPage(1, config, token, signal);
+  const totalPages = Math.max(1, first.totalPages);
+  let completedPages = 1;
+
+  onProgress?.({
+    deviceId: config.deviceId,
+    completedPages,
+    totalPages,
+  });
 
   if (first.totalPages <= 1) {
     return first.logs;
@@ -83,11 +104,64 @@ export async function fetchDeviceLogs(
   // 2. Fetch remaining pages in parallel
   const remaining = await Promise.all(
     Array.from({ length: first.totalPages - 1 }, (_, i) =>
-      fetchDeviceLogPage(i + 2, config, token, signal).then((r) => r.logs),
+      fetchDeviceLogPage(i + 2, config, token, signal).then((result) => {
+        completedPages += 1;
+        onProgress?.({
+          deviceId: config.deviceId,
+          completedPages,
+          totalPages,
+        });
+        return result.logs;
+      }),
     ),
   );
 
   return [...first.logs, ...remaining.flat()];
+}
+
+/**
+ * Fetches only the latest device-log pages.
+ * This is used by the live dashboard so it doesn't need to load
+ * the full device history for every machine on every refresh.
+ */
+export async function fetchLatestDeviceLogs(
+  config: ReportConfig,
+  token: string,
+  signal?: AbortSignal,
+  pagesBack = 2,
+  onProgress?: (progress: DeviceLogsFetchProgress) => void,
+): Promise<DeviceLogEntry[]> {
+  const first = await fetchDeviceLogPage(1, config, token, signal);
+  const startPage = Math.max(2, first.totalPages - pagesBack + 1);
+  const latestPageCount = Math.max(0, first.totalPages - startPage + 1);
+  const totalPages = 1 + latestPageCount;
+  let completedPages = 1;
+
+  onProgress?.({
+    deviceId: config.deviceId,
+    completedPages,
+    totalPages,
+  });
+
+  if (first.totalPages <= 1) {
+    return first.logs;
+  }
+
+  const latestPages = await Promise.all(
+    Array.from({ length: latestPageCount }, (_, i) =>
+      fetchDeviceLogPage(startPage + i, config, token, signal).then((result) => {
+        completedPages += 1;
+        onProgress?.({
+          deviceId: config.deviceId,
+          completedPages,
+          totalPages,
+        });
+        return result.logs;
+      }),
+    ),
+  );
+
+  return latestPages.flat();
 }
 
 export async function fetchWoDetails(
@@ -162,6 +236,7 @@ export async function fetchWoDetails(
 export async function fetchAllWoDetails(
   woIds: number[],
   token: string,
+  onProgress?: (progress: WoDetailsFetchProgress) => void,
 ): Promise<Map<number, WoDetails>> {
   const uniqueIds = [...new Set(woIds)];
   const results = new Map<number, WoDetails>();
@@ -171,7 +246,9 @@ export async function fetchAllWoDetails(
   }
 
   const CONCURRENCY = 10;
+  const total = uniqueIds.length;
   let index = 0;
+  let completed = 0;
 
   async function runNext(): Promise<void> {
     while (index < uniqueIds.length) {
@@ -180,6 +257,13 @@ export async function fetchAllWoDetails(
       if (wo) {
         results.set(id, wo);
       }
+
+      completed += 1;
+      onProgress?.({
+        completed,
+        total,
+        woId: id,
+      });
     }
   }
 

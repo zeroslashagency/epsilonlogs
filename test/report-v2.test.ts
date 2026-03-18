@@ -73,6 +73,21 @@ describe("report builder numeric duration aggregation", () => {
     expect(stats.totalLoadingUnloadingSec).toBe(60);
     expect(stats.totalIdleSec).toBe(1000);
   });
+
+  it("preserves the machine id in WO breakdown rows", () => {
+    const logs: DeviceLogEntry[] = [
+      makeLog(1, 0, "WO_START"),
+      makeLog(2, 120, "WO_STOP"),
+    ];
+
+    const detailsMap = new Map<number, WoDetails>([
+      [900, makeDetails({ device_id: 19, wo_id_str: "900" })],
+    ]);
+
+    const { stats } = buildReport(logs, detailsMap, makeConfig());
+
+    expect(stats.woBreakdowns[0]?.deviceId).toBe(19);
+  });
 });
 
 describe("cycle classification boundaries", () => {

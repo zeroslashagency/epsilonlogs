@@ -22,7 +22,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
-  fetchDeviceLogs,
+  fetchLatestDeviceLogs,
   fetchDeviceNameMap,
   fetchWoDetails,
   formatDateForApi,
@@ -43,10 +43,19 @@ import {
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { WoReportPanel } from "./WoReportPanel";
 import {
+  compareDashboardMachineOrder,
   DEFAULT_DASHBOARD_MACHINE_IDS,
   mergeMachineIds,
   parseManualMachineId,
+  selectPreferredCardsPerMachine,
 } from "./wo-report-utils";
+import { getMachineLabel, getMachineType } from "../report/machine-config";
+import {
+  buildMachineErrorSnapshot,
+  buildMachineSnapshot,
+  type MachineSnapshot,
+  type MachineStatus,
+} from "./live-machine-status";
 
 const TOKEN = import.meta.env.VITE_API_TOKEN;
 const REFRESH_INTERVAL_MS = 30000;
@@ -55,9 +64,6 @@ const WO_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
 const LIVE_WINDOW_MS = 15 * 60 * 1000;
 const TOP_WO_LIMIT = 12;
 
-type RangePreset = "DAY" | "LAST_3_DAYS" | "LAST_7_DAYS" | "LAST_30_DAYS";
-type ShiftPreset = "ALL" | "A" | "B" | "C";
-type MachineScope = "ALL" | number;
 type DetailStage = 1 | 2 | 3;
 type WoExecutionStatus = "LIVE" | "PROCESSING" | "COMPLETE";
 type RowClassification = "GOOD" | "WARNING" | "BAD" | "UNKNOWN";
@@ -90,6 +96,20 @@ interface WoCardSummary {
   latestReason: string;
   jobTypeTags: WoJobTag[];
 }
+
+type OverviewCardItem =
+  | {
+      kind: "wo";
+      key: string;
+      machineId: number | null;
+      card: WoCardSummary;
+    }
+  | {
+      kind: "status";
+      key: string;
+      machineId: number;
+      snapshot: MachineSnapshot | null;
+    };
 
 interface WoAccumulator {
   woId: string;
@@ -130,43 +150,43 @@ const executionStatusBadgeClass: Record<WoExecutionStatus, string> = {
   COMPLETE: "bg-emerald-100 text-emerald-700 ring-emerald-300",
 };
 
-function getWindowStart(rangePreset: RangePreset, now: Date): Date {
+const machineStatusChipClass: Record<MachineStatus, string> = {
+  LIVE: "bg-emerald-100 text-emerald-700",
+  SETTING: "bg-amber-100 text-amber-700",
+  MAINTENANCE: "bg-rose-100 text-rose-700",
+  CALIBRATION: "bg-cyan-100 text-cyan-700",
+  PAUSED: "bg-violet-100 text-violet-700",
+  IDLE: "bg-slate-100 text-slate-700",
+  OFFLINE: "bg-slate-100 text-slate-500",
+  ERROR: "bg-fuchsia-100 text-fuchsia-700",
+};
+
+const machineStatusDotClass: Record<MachineStatus, string> = {
+  LIVE: "bg-emerald-500 animate-pulse",
+  SETTING: "bg-amber-500",
+  MAINTENANCE: "bg-rose-500",
+  CALIBRATION: "bg-cyan-500",
+  PAUSED: "bg-violet-500",
+  IDLE: "bg-slate-500",
+  OFFLINE: "bg-slate-400",
+  ERROR: "bg-fuchsia-500",
+};
+
+const loadingMachineStatusChipClass =
+  "bg-slate-100 text-slate-500";
+const loadingMachineStatusDotClass =
+  "bg-slate-300 animate-pulse";
+
+const WO_OVERVIEW_STATUS_PRIORITY: Record<WoExecutionStatus, number> = {
+  LIVE: 0,
+  PROCESSING: 1,
+  COMPLETE: 2,
+};
+
+function getTodayWindowStart(now: Date): Date {
   const start = new Date(now);
-
-  if (rangePreset === "DAY") {
-    start.setHours(start.getHours() - 24);
-    return start;
-  }
-
-  if (rangePreset === "LAST_3_DAYS") {
-    start.setDate(start.getDate() - 3);
-    return start;
-  }
-
-  if (rangePreset === "LAST_7_DAYS") {
-    start.setDate(start.getDate() - 7);
-    return start;
-  }
-
-  start.setDate(start.getDate() - 30);
+  start.setHours(0, 0, 0, 0);
   return start;
-}
-
-function belongsToShift(dateValue: Date, shiftPreset: ShiftPreset): boolean {
-  if (shiftPreset === "ALL") {
-    return true;
-  }
-
-  const hour = dateValue.getHours();
-  if (shiftPreset === "A") {
-    return hour >= 6 && hour < 14;
-  }
-
-  if (shiftPreset === "B") {
-    return hour >= 14 && hour < 22;
-  }
-
-  return hour >= 22 || hour < 6;
 }
 
 function compactTime(value: Date | null): string {
@@ -180,6 +200,32 @@ function compactTime(value: Date | null): string {
 function formatDateTime(value: Date | null): string {
   if (!value) return "-";
   return value.toLocaleString("en-GB");
+}
+
+function formatRelativeLogAge(value: number | Date | null): string {
+  if (value == null) {
+    return "No recent log";
+  }
+
+  const timestamp = value instanceof Date ? value.getTime() : value;
+  const ageMs = Math.max(0, Date.now() - timestamp);
+
+  if (ageMs < 60_000) {
+    return "Just now";
+  }
+
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
 function hasText(value: string | null | undefined): boolean {
@@ -322,6 +368,125 @@ function getJobTypeBadgeClass(jobType: WoJobType): string {
   return "bg-slate-100 text-slate-700 ring-slate-300";
 }
 
+function getWoOverviewJobTypeBadgeClass(jobType: WoJobType): string {
+  if (jobType === "Production") {
+    return "bg-emerald-100 text-emerald-700 ring-emerald-300";
+  }
+  if (jobType === "Setting") {
+    return "bg-violet-100 text-violet-700 ring-violet-300";
+  }
+  if (jobType === "Calibration") {
+    return "bg-cyan-100 text-cyan-700 ring-cyan-300";
+  }
+  if (jobType === "Maintenance") {
+    return "bg-rose-100 text-rose-700 ring-rose-300";
+  }
+  if (
+    jobType === "Man" ||
+    jobType === "Man Production" ||
+    jobType === "Man Setting"
+  ) {
+    return "bg-orange-100 text-orange-700 ring-orange-300";
+  }
+  if (jobType === "Training") return "bg-lime-100 text-lime-700 ring-lime-300";
+  if (jobType === "RD") return "bg-fuchsia-100 text-fuchsia-700 ring-fuchsia-300";
+  if (jobType === "Manual Input") {
+    return "bg-emerald-100 text-emerald-700 ring-emerald-300";
+  }
+  return "bg-slate-100 text-slate-700 ring-slate-300";
+}
+
+function getWoOverviewStatusBadgeClass(status: WoExecutionStatus): string {
+  if (status === "LIVE") {
+    return "bg-emerald-100 text-emerald-700 ring-emerald-300";
+  }
+  if (status === "PROCESSING") {
+    return "bg-amber-100 text-amber-700 ring-amber-300";
+  }
+  return "bg-slate-100 text-slate-700 ring-slate-300";
+}
+
+function getWoOverviewMachineStatusBadgeClass(
+  status: MachineStatus | null,
+): string {
+  if (status === "LIVE") {
+    return "bg-emerald-100 text-emerald-700 ring-emerald-300";
+  }
+  if (status === "SETTING") {
+    return "bg-violet-100 text-violet-700 ring-violet-300";
+  }
+  if (status === "MAINTENANCE" || status === "OFFLINE") {
+    return "bg-rose-100 text-rose-700 ring-rose-300";
+  }
+  if (status === "CALIBRATION") {
+    return "bg-cyan-100 text-cyan-700 ring-cyan-300";
+  }
+  if (status === "PAUSED") {
+    return "bg-amber-100 text-amber-700 ring-amber-300";
+  }
+  if (status === "ERROR") {
+    return "bg-fuchsia-100 text-fuchsia-700 ring-fuchsia-300";
+  }
+  return "bg-slate-100 text-slate-700 ring-slate-300";
+}
+
+function getWoOverviewCardSurfaceClass(
+  jobType: WoJobType,
+  status: WoExecutionStatus,
+  isActive: boolean,
+): string {
+  const activeClass = isActive
+    ? "ring-1 ring-slate-300 shadow-[0_16px_34px_-26px_rgba(15,23,42,0.95)]"
+    : "shadow-[0_12px_24px_-22px_rgba(15,23,42,0.9)]";
+
+  if (status === "LIVE" && jobType === "Production") {
+    return `border-emerald-200 bg-emerald-50/60 ${activeClass}`;
+  }
+  if (status === "LIVE" && jobType === "Setting") {
+    return `border-violet-200 bg-violet-50/60 ${activeClass}`;
+  }
+  if (status === "LIVE" && jobType === "Maintenance") {
+    return `border-rose-200 bg-rose-50/60 ${activeClass}`;
+  }
+  if (status === "PROCESSING") {
+    return `border-amber-200 bg-amber-50/55 ${activeClass}`;
+  }
+  if (jobType === "Calibration") {
+    return `border-cyan-200 bg-cyan-50/55 ${activeClass}`;
+  }
+  if (jobType === "RD") {
+    return `border-fuchsia-200 bg-fuchsia-50/55 ${activeClass}`;
+  }
+  return `border-slate-200 bg-white ${activeClass}`;
+}
+
+function getWoOverviewMachineSurfaceClass(
+  status: MachineStatus | null,
+): string {
+  const baseShadow =
+    "shadow-[0_12px_24px_-22px_rgba(15,23,42,0.9)]";
+
+  if (status === "LIVE") {
+    return `border-emerald-200 bg-emerald-50/60 ${baseShadow}`;
+  }
+  if (status === "SETTING") {
+    return `border-violet-200 bg-violet-50/60 ${baseShadow}`;
+  }
+  if (status === "MAINTENANCE" || status === "OFFLINE") {
+    return `border-rose-200 bg-rose-50/60 ${baseShadow}`;
+  }
+  if (status === "CALIBRATION") {
+    return `border-cyan-200 bg-cyan-50/60 ${baseShadow}`;
+  }
+  if (status === "PAUSED") {
+    return `border-amber-200 bg-amber-50/60 ${baseShadow}`;
+  }
+  if (status === "ERROR") {
+    return `border-fuchsia-200 bg-fuchsia-50/60 ${baseShadow}`;
+  }
+  return `border-slate-200 bg-white ${baseShadow}`;
+}
+
 function buildDefaultAccumulator(woId: string, row: ReportRow): WoAccumulator {
   const timestamp = row.timestamp;
   const latestAction = row.action || "";
@@ -362,9 +527,6 @@ export default function ProductionHubV2() {
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
-  const [rangePreset, setRangePreset] = useState<RangePreset>("DAY");
-  const [shiftPreset, setShiftPreset] = useState<ShiftPreset>("ALL");
-  const [machineScope, setMachineScope] = useState<MachineScope>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [deviceNameMap, setDeviceNameMap] = useState<Map<number, string>>(
     new Map(),
@@ -376,6 +538,9 @@ export default function ProductionHubV2() {
   );
 
   const [allRows, setAllRows] = useState<ReportRow[]>([]);
+  const [machineSnapshots, setMachineSnapshots] = useState<MachineSnapshot[]>(
+    [],
+  );
   const [woDetailsById, setWoDetailsById] = useState<Map<number, WoDetails>>(
     new Map(),
   );
@@ -398,6 +563,13 @@ export default function ProductionHubV2() {
       mergeMachineIds(DEFAULT_DASHBOARD_MACHINE_IDS, customMachineIds),
     [customMachineIds],
   );
+
+  const machineSnapshotMap = useMemo(
+    () => new Map(machineSnapshots.map((snapshot) => [snapshot.machineId, snapshot])),
+    [machineSnapshots],
+  );
+
+  const visibleOverviewMachineIds = activeMachineIds;
 
   const filteredRows = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -506,7 +678,8 @@ export default function ProductionHubV2() {
       grouped.set(woId, entry);
     });
 
-    return [...grouped.values()]
+    return selectPreferredCardsPerMachine(
+      [...grouped.values()]
       .sort((left, right) => right.latestTimestamp - left.latestTimestamp)
       .slice(0, TOP_WO_LIMIT)
       .map((entry) => {
@@ -549,8 +722,23 @@ export default function ProductionHubV2() {
           jobTypeTags:
             visibleTags.length > 0 ? visibleTags : [{ jobType: entry.jobType }],
         };
+      }),
+      WO_OVERVIEW_STATUS_PRIORITY,
+    )
+      .sort((left, right) => {
+        const byMachine = compareDashboardMachineOrder(
+          left.machineId,
+          right.machineId,
+          activeMachineIds,
+        );
+
+        if (byMachine !== 0) {
+          return byMachine;
+        }
+
+        return right.latestTimestamp - left.latestTimestamp;
       });
-  }, [filteredRows]);
+  }, [activeMachineIds, filteredRows]);
 
   useEffect(() => {
     if (topWoCards.length === 0) {
@@ -574,6 +762,49 @@ export default function ProductionHubV2() {
     () => topWoCards.find((card) => card.woId === selectedWoId) || null,
     [selectedWoId, topWoCards],
   );
+
+  const overviewCards = useMemo<OverviewCardItem[]>(() => {
+    if (searchQuery.trim().length > 0) {
+      return topWoCards.map((card) => ({
+        kind: "wo",
+        key: `wo:${card.woId}`,
+        machineId: card.machineId,
+        card,
+      }));
+    }
+
+    const cardByMachineId = new Map<number, WoCardSummary>();
+    topWoCards.forEach((card) => {
+      if (card.machineId != null && !cardByMachineId.has(card.machineId)) {
+        cardByMachineId.set(card.machineId, card);
+      }
+    });
+
+    return visibleOverviewMachineIds.map((machineId) => {
+      const card = cardByMachineId.get(machineId);
+
+      if (card) {
+        return {
+          kind: "wo",
+          key: `wo:${card.woId}`,
+          machineId,
+          card,
+        };
+      }
+
+      return {
+        kind: "status",
+        key: `status:${machineId}`,
+        machineId,
+        snapshot: machineSnapshotMap.get(machineId) ?? null,
+      };
+    });
+  }, [
+    machineSnapshotMap,
+    searchQuery,
+    topWoCards,
+    visibleOverviewMachineIds,
+  ]);
 
   const selectedWoRows = useMemo(() => {
     if (!selectedWoId) {
@@ -756,6 +987,14 @@ export default function ProductionHubV2() {
     setError(null);
 
     if (!TOKEN) {
+      setMachineSnapshots(
+        activeMachineIds.map((machineId) =>
+          buildMachineErrorSnapshot(
+            machineId,
+            "Missing VITE_API_TOKEN. Set token to enable live dashboard data.",
+          ),
+        ),
+      );
       setError(
         "Missing VITE_API_TOKEN. Set token to enable live dashboard data.",
       );
@@ -763,7 +1002,7 @@ export default function ProductionHubV2() {
       return;
     }
 
-    const cacheKey = `${rangePreset}|${shiftPreset}|${machineScope}|${activeMachineIds.join(",")}`;
+    const cacheKey = `today|all|${activeMachineIds.join(",")}`;
     const nowTimestamp = Date.now();
     const cachedOverview = overviewCacheRef.current.get(cacheKey);
     if (
@@ -779,7 +1018,8 @@ export default function ProductionHubV2() {
 
     try {
       const now = new Date();
-      const startWindow = getWindowStart(rangePreset, now);
+      const nowMs = now.getTime();
+      const startWindow = getTodayWindowStart(now);
       const configForDevice = (deviceId: number): ReportConfig => ({
         deviceId,
         startDate: formatDateForApi(startWindow),
@@ -789,40 +1029,76 @@ export default function ProductionHubV2() {
 
       const deviceLogResults = await Promise.allSettled(
         activeMachineIds.map(async (deviceId) => {
-          const logs = await fetchDeviceLogs(
+          const logs = await fetchLatestDeviceLogs(
             configForDevice(deviceId),
             TOKEN,
             signal,
           );
-          const shiftFiltered = logs.filter((log) =>
-            belongsToShift(new Date(log.log_time), shiftPreset),
-          );
-          return [deviceId, shiftFiltered] as const;
+          return [deviceId, logs] as const;
         }),
       );
+
+      if (signal.aborted) return;
 
       const deviceLogsPairs = deviceLogResults.flatMap((result) =>
         result.status === "fulfilled"
           ? [result.value as readonly [number, DeviceLogEntry[]]]
           : [],
       );
+      const failedCount = deviceLogResults.filter(
+        (result) => result.status === "rejected",
+      ).length;
+      const successfulCount = deviceLogResults.length - failedCount;
+      const nextMachineSnapshots = activeMachineIds.map((machineId, index) => {
+        const result = deviceLogResults[index];
+        if (!result || result.status === "rejected") {
+          return buildMachineErrorSnapshot(
+            machineId,
+            result?.reason instanceof Error
+              ? result.reason.message
+              : "Machine request failed.",
+          );
+        }
 
-      if (deviceLogsPairs.length === 0) {
-        throw new Error("No device logs available for selected range.");
+        return buildMachineSnapshot({
+          machineId,
+          logs: result.value[1],
+          now: nowMs,
+        });
+      });
+      setMachineSnapshots(nextMachineSnapshots);
+
+      const combinedLogs = deviceLogsPairs.flatMap(([, logs]) => logs);
+
+      if (deviceLogResults.length === 0) {
+        setAllRows([]);
+        setLastRefreshed(new Date());
+        setError("No machines selected.");
+        return;
       }
 
-      const logsByDevice = new Map<number, DeviceLogEntry[]>(deviceLogsPairs);
-      const combinedLogs = deviceLogsPairs.flatMap(([, logs]) => logs);
-      const scopeLogs =
-        machineScope === "ALL"
-          ? combinedLogs
-          : logsByDevice.get(machineScope) || [];
+      if (successfulCount === 0) {
+        setAllRows([]);
+        setLastRefreshed(new Date());
+        setError(
+          `Live refresh failed for all ${activeMachineIds.length} machines. Check API response time or connectivity.`,
+        );
+        return;
+      }
 
-      const report = buildReportV2(scopeLogs, new Map(), {
-        deviceId:
-          machineScope === "ALL"
-            ? activeMachineIds[0] || DEFAULT_DASHBOARD_MACHINE_IDS[0]
-            : machineScope,
+      if (combinedLogs.length === 0) {
+        setAllRows([]);
+        setLastRefreshed(new Date());
+        setError(
+          failedCount > 0
+            ? `No logs returned from ${successfulCount} machine(s). ${failedCount} machine request(s) failed.`
+            : `No logs returned for today across ${activeMachineIds.length} machines.`,
+        );
+        return;
+      }
+
+      const report = buildReportV2(combinedLogs, new Map(), {
+        deviceId: activeMachineIds[0] || DEFAULT_DASHBOARD_MACHINE_IDS[0],
         startDate: formatDateForApi(startWindow),
         endDate: formatDateForApi(now),
         toleranceSec: 10,
@@ -847,7 +1123,6 @@ export default function ProductionHubV2() {
       ].slice(0, TOP_WO_LIMIT);
       prefetchIds.forEach((id) => void ensureWoDetailsLoaded(String(id)));
 
-      const failedCount = deviceLogResults.length - deviceLogsPairs.length;
       if (failedCount > 0) {
         setError(
           `Partial data loaded. ${failedCount} machine request(s) failed.`,
@@ -862,6 +1137,14 @@ export default function ProductionHubV2() {
           `Live refresh failed, showing cached data. ${err instanceof Error ? err.message : ""}`.trim(),
         );
       } else {
+        setMachineSnapshots(
+          activeMachineIds.map((machineId) =>
+            buildMachineErrorSnapshot(
+              machineId,
+              err instanceof Error ? err.message : "Failed to refresh dashboard.",
+            ),
+          ),
+        );
         setError(
           err instanceof Error ? err.message : "Failed to refresh dashboard.",
         );
@@ -877,7 +1160,7 @@ export default function ProductionHubV2() {
       void fetchData();
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(intervalId);
-  }, [activeMachineIds, machineScope, rangePreset, shiftPreset]);
+  }, [activeMachineIds]);
 
   useEffect(() => {
     if (!selectedWoId || detailStage < 2) {
@@ -885,16 +1168,6 @@ export default function ProductionHubV2() {
     }
     void ensureWoDetailsLoaded(selectedWoId);
   }, [detailStage, ensureWoDetailsLoaded, selectedWoId]);
-
-  useEffect(() => {
-    if (machineScope === "ALL") {
-      return;
-    }
-
-    if (!activeMachineIds.includes(machineScope)) {
-      setMachineScope("ALL");
-    }
-  }, [activeMachineIds, machineScope]);
 
   useEffect(() => {
     if (!TOKEN) {
@@ -1063,52 +1336,14 @@ export default function ProductionHubV2() {
 
           <section className="mt-4 rounded-2xl border border-slate-200 bg-white/85 px-3 py-3 sm:px-4 dark:border-slate-700 dark:bg-slate-800/90">
             <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={rangePreset}
-                onChange={(event) =>
-                  setRangePreset(event.target.value as RangePreset)
-                }
-                className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 sm:text-sm"
-              >
-                <option value="LAST_30_DAYS">Month</option>
-                <option value="LAST_7_DAYS">7 Days</option>
-                <option value="LAST_3_DAYS">3 Days</option>
-                <option value="DAY">Day</option>
-              </select>
-
-              <select
-                value={shiftPreset}
-                onChange={(event) =>
-                  setShiftPreset(event.target.value as ShiftPreset)
-                }
-                className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 sm:text-sm"
-              >
-                <option value="ALL">All Shifts</option>
-                <option value="A">Shift A (06-14)</option>
-                <option value="B">Shift B (14-22)</option>
-                <option value="C">Shift C (22-06)</option>
-              </select>
-
-              <select
-                value={machineScope === "ALL" ? "ALL" : String(machineScope)}
-                onChange={(event) =>
-                  setMachineScope(
-                    event.target.value === "ALL"
-                      ? "ALL"
-                      : Number(event.target.value),
-                  )
-                }
-                className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 sm:text-sm"
-              >
-                <option value="ALL">All Machines</option>
-                {activeMachineIds.map((id) => (
-                  <option key={id} value={id}>
-                    {deviceNameMap.get(id)
-                      ? `${deviceNameMap.get(id)} (${id})`
-                      : `Machine ${id}`}
-                  </option>
-                ))}
-              </select>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Live Today Board
+                </p>
+                <p className="mt-0.5 text-sm text-slate-700">
+                  Today only · All dashboard machines
+                </p>
+              </div>
 
               <Link
                 to="/report"
@@ -1134,7 +1369,7 @@ export default function ProductionHubV2() {
             </div>
 
             <div className="mt-2 text-xs text-slate-500">
-              Live: {compactTime(lastRefreshed)}
+              Live: {loading && !lastRefreshed ? "loading..." : compactTime(lastRefreshed)}
             </div>
 
             <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
@@ -1177,10 +1412,29 @@ export default function ProductionHubV2() {
                 </div>
               </div>
 
+              {/* Machine badges keep the existing layout, but status now comes from direct machine snapshots. */}
               <div className="mt-3 flex flex-wrap gap-2">
                 {activeMachineIds.map((machineId) => {
                   const isCustomMachine = customMachineIds.includes(machineId);
-                  const machineLabel = deviceNameMap.get(machineId);
+                  const machineType = getMachineType(machineId);
+                  const snapshot = machineSnapshotMap.get(machineId);
+                  const status = snapshot?.status ?? null;
+                  const statusLabel = snapshot?.statusLabel ?? (loading ? "Loading" : "Offline");
+                  const statusDotClass = status
+                    ? machineStatusDotClass[status]
+                    : loading
+                      ? loadingMachineStatusDotClass
+                      : machineStatusDotClass.OFFLINE;
+                  const statusChipClass = status
+                    ? machineStatusChipClass[status]
+                    : loading
+                      ? loadingMachineStatusChipClass
+                      : machineStatusChipClass.OFFLINE;
+                  const statusTitle =
+                    snapshot?.statusMessage ??
+                    (loading
+                      ? "Loading live machine data..."
+                      : "No recent machine data.");
 
                   return (
                     <span
@@ -1188,16 +1442,28 @@ export default function ProductionHubV2() {
                       className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
                         isCustomMachine
                           ? "border-cyan-200 bg-cyan-50 text-cyan-700"
+                          : machineType === 'VMC'
+                          ? "border-blue-200 bg-blue-50 text-blue-700"
+                          : machineType === 'CNC'
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                           : "border-slate-200 bg-white text-slate-700"
                       }`}
                     >
+                      {/* Live status dot */}
+                      <span
+                        className={`h-2 w-2 rounded-full flex-shrink-0 ${statusDotClass}`}
+                        title={statusTitle}
+                      />
                       <span className="font-semibold">
-                        {machineLabel
-                          ? `${machineLabel} (${machineId})`
-                          : `Machine ${machineId}`}
+                        {getMachineLabel(machineId)}
                       </span>
                       <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-500">
                         {isCustomMachine ? "manual" : "core"}
+                      </span>
+                      <span
+                        className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusChipClass}`}
+                      >
+                        {statusLabel}
                       </span>
                       {isCustomMachine ? (
                         <button
@@ -1232,18 +1498,121 @@ export default function ProductionHubV2() {
                 WO Overview
               </h1>
               <span className="rounded-full bg-white px-3 py-1 text-xs text-slate-500">
-                Click card to expand summary · Showing latest {TOP_WO_LIMIT}
+                {searchQuery.trim().length > 0
+                  ? `Today live board · ${overviewCards.length} matching WOs`
+                  : `Today live board · Showing ${visibleOverviewMachineIds.length} machines`}
               </span>
             </div>
 
-            {topWoCards.length === 0 ? (
+            {loading &&
+            !lastRefreshed &&
+            topWoCards.length === 0 &&
+            machineSnapshots.length === 0 ? (
               <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
-                No WO cards available for current filters.
+                Loading dashboard data...
+              </div>
+            ) : overviewCards.length === 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+                No WO cards available for today.
               </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {topWoCards.map((card) => {
+                {overviewCards.map((overviewCard) => {
+                  if (overviewCard.kind === "status") {
+                    const snapshot = overviewCard.snapshot;
+                    const status = snapshot?.status ?? "OFFLINE";
+                    const statusLabel = snapshot?.statusLabel ?? "Offline";
+                    const recentLogAgeText = formatRelativeLogAge(
+                      snapshot?.latestTimestamp ?? null,
+                    );
+                    const hasKnownJobType =
+                      snapshot?.jobTypeLabel != null &&
+                      snapshot.jobTypeLabel !== "Unknown";
+                    const PlaceholderIcon = hasKnownJobType
+                      ? getJobTypeIcon(snapshot.jobTypeLabel as WoJobType)
+                      : ShieldAlert;
+                    const placeholderTagClass = hasKnownJobType
+                      ? getWoOverviewJobTypeBadgeClass(
+                          snapshot.jobTypeLabel as WoJobType,
+                        )
+                      : "bg-slate-100 text-slate-700 ring-slate-300";
+                    const currentWoLabel = snapshot?.currentWoId
+                      ? `WO-${snapshot.currentWoId}`
+                      : "No Active WO";
+
+                    return (
+                      <div
+                        key={overviewCard.key}
+                        className={`rounded-2xl border p-4 text-left ${getWoOverviewMachineSurfaceClass(
+                          status,
+                        )}`}
+                      >
+                        <div className="mb-3 flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-2 text-xs text-slate-600">
+                            <span className="rounded-md bg-white/80 p-1.5">
+                              <PlaceholderIcon className="h-3.5 w-3.5" />
+                            </span>
+                            <div className="flex flex-wrap gap-1">
+                              <span
+                                className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${placeholderTagClass}`}
+                              >
+                                {hasKnownJobType ? snapshot.jobTypeLabel : "No Active WO"}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end gap-1">
+                            <span
+                              className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase ring-1 ${getWoOverviewMachineStatusBadgeClass(
+                                status,
+                              )}`}
+                            >
+                              {statusLabel}
+                            </span>
+                            <span className="text-[10px] font-medium text-slate-400">
+                              {recentLogAgeText}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <p className="text-lg font-bold tracking-tight text-slate-900">
+                            {getMachineLabel(overviewCard.machineId)}
+                          </p>
+                          <p className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">
+                            {snapshot?.operatorName || "No active operator"}
+                          </p>
+                        </div>
+                        <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-800">
+                          {currentWoLabel}
+                        </p>
+
+                        <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                          <p className="text-slate-500">Status</p>
+                          <p className="font-medium text-slate-700">
+                            {statusLabel}
+                          </p>
+                          <p className="text-slate-500">Last Seen</p>
+                          <p className="font-medium text-slate-700">
+                            {recentLogAgeText}
+                          </p>
+                          <p className="text-slate-500">Last Event</p>
+                          <p className="font-medium text-slate-700">
+                            {snapshot?.latestAction || "-"}
+                          </p>
+                        </div>
+
+                        <div className="mt-3 border-t border-slate-100 pt-2.5 text-[11px] text-slate-500">
+                          {snapshot?.statusMessage || "No live WO summary available."}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  const { card } = overviewCard;
                   const JobTypeIcon = getJobTypeIcon(card.jobType);
+                  const recentLogAgeText = formatRelativeLogAge(
+                    card.latestTimestamp,
+                  );
                   const isStageTwo =
                     selectedWoId === card.woId &&
                     detailStage === 2 &&
@@ -1256,40 +1625,50 @@ export default function ProductionHubV2() {
                       expanded={isStageTwo}
                       onToggle={() => handleWoCardClick(card.woId)}
                       transitionDuration={0.22}
-                      className={`rounded-2xl border bg-white p-4 text-left shadow-[0_12px_24px_-22px_rgba(15,23,42,0.9)] transition hover:-translate-y-0.5 ${
-                        isActive
-                          ? "border-slate-900 ring-1 ring-slate-300"
-                          : "border-slate-200"
-                      }`}
+                      className={`rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 ${getWoOverviewCardSurfaceClass(
+                        card.jobType,
+                        card.executionStatus,
+                        isActive,
+                      )}`}
                     >
                       <ExpandableTrigger className="w-full text-left">
                         <div className="mb-3 flex items-start justify-between gap-2">
                           <div className="flex items-start gap-2 text-xs text-slate-600">
-                            <span className="rounded-md bg-slate-100 p-1.5">
+                            <span className="rounded-md bg-white/80 p-1.5">
                               <JobTypeIcon className="h-3.5 w-3.5" />
                             </span>
                             <div className="flex flex-wrap gap-1">
                               {card.jobTypeTags.slice(0, 3).map((jobTag) => (
                                 <span
                                   key={`${card.woId}-${jobTag.jobType}`}
-                                  className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${getJobTypeBadgeClass(jobTag.jobType)}`}
+                                  className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${getWoOverviewJobTypeBadgeClass(jobTag.jobType)}`}
                                 >
                                   {jobTag.jobType}
                                 </span>
                               ))}
                             </div>
                           </div>
-                          <span
-                            className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ring-1 ${executionStatusBadgeClass[card.executionStatus]}`}
-                          >
-                            {card.executionStatus}
-                          </span>
+                          <div className="flex flex-col items-end gap-1">
+                            <span
+                              className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ring-1 ${getWoOverviewStatusBadgeClass(card.executionStatus)}`}
+                            >
+                              {card.executionStatus}
+                            </span>
+                            <span className="text-[10px] font-medium text-slate-400">
+                              {recentLogAgeText}
+                            </span>
+                          </div>
                         </div>
 
-                        <p className="text-lg font-semibold text-slate-800">{`WO-${card.woDisplayId}`}</p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {`${card.machineId != null ? deviceNameMap.get(card.machineId) || `Machine ${card.machineId}` : "Machine -"} · ${card.operatorName}`}
-                        </p>
+                        <div className="space-y-1">
+                          <p className="text-lg font-bold tracking-tight text-slate-900">
+                            {card.machineId != null ? getMachineLabel(card.machineId) : "Machine -"}
+                          </p>
+                          <p className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">
+                            {card.operatorName}
+                          </p>
+                        </div>
+                        <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-800">{`WO-${card.woDisplayId}`}</p>
 
                         <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
                           <p className="text-slate-500">PCL Time</p>
@@ -1454,7 +1833,7 @@ export default function ProductionHubV2() {
                 <div>
                   <p className="text-xl font-semibold text-slate-800">{`WO-${selectedWoCard.woDisplayId}`}</p>
                   <p className="mt-1 text-sm text-slate-600">
-                    {`${selectedWoCard.machineId != null ? deviceNameMap.get(selectedWoCard.machineId) || `Machine ${selectedWoCard.machineId}` : "Machine -"} · ${selectedWoCard.operatorName}`}
+                    {`${selectedWoCard.machineId != null ? getMachineLabel(selectedWoCard.machineId) : 'Machine -'} · ${selectedWoCard.operatorName}`}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">

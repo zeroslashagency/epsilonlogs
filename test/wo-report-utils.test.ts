@@ -8,9 +8,11 @@ import type {
 import {
   buildWoFetchConfig,
   buildWoFilename,
+  compareDashboardMachineOrder,
   collectUniqueOriginalLogs,
   mergeMachineIds,
   parseManualMachineId,
+  selectPreferredCardsPerMachine,
 } from "../src/hub-v2/wo-report-utils";
 
 function makeLog(overrides: Partial<DeviceLogEntry> = {}): DeviceLogEntry {
@@ -77,6 +79,61 @@ describe("wo report utils", () => {
     expect(parseManualMachineId(" 19 ")).toBe(19);
     expect(parseManualMachineId("machine-19")).toBeNull();
     expect(parseManualMachineId("0")).toBeNull();
+  });
+
+  it("sorts machines in dashboard display order", () => {
+    const orderedMachineIds = [11, 12, 13, 14, 15, 16, 19, 18] as const;
+    const machineIds = [16, 12, 18, 13, 11, null, 29];
+
+    const sorted = [...machineIds].sort((left, right) =>
+      compareDashboardMachineOrder(left, right, orderedMachineIds),
+    );
+
+    expect(sorted).toEqual([11, 12, 13, 16, 18, 29, null]);
+  });
+
+  it("keeps only the best current card for each machine", () => {
+    const cards = [
+      {
+        woId: "2982",
+        machineId: 16,
+        latestTimestamp: 100,
+        executionStatus: "LIVE",
+      },
+      {
+        woId: "2770",
+        machineId: 16,
+        latestTimestamp: 200,
+        executionStatus: "COMPLETE",
+      },
+      {
+        woId: "3012",
+        machineId: 12,
+        latestTimestamp: 150,
+        executionStatus: "LIVE",
+      },
+    ];
+
+    const selected = selectPreferredCardsPerMachine(cards, {
+      LIVE: 0,
+      PROCESSING: 1,
+      COMPLETE: 2,
+    });
+
+    expect(selected).toEqual([
+      {
+        woId: "2982",
+        machineId: 16,
+        latestTimestamp: 100,
+        executionStatus: "LIVE",
+      },
+      {
+        woId: "3012",
+        machineId: 12,
+        latestTimestamp: 150,
+        executionStatus: "LIVE",
+      },
+    ]);
   });
 
   it("collects unique original logs in ascending order", () => {

@@ -15,6 +15,12 @@ interface BoxLoadingPreloaderProps {
    * When false (default) it uses position:fixed and covers the whole viewport.
    */
   contained?: boolean;
+  /** Controlled progress value. When omitted, the component simulates progress. */
+  progress?: number;
+  /** Real loading stage shown above the box row. */
+  statusLabel?: string;
+  /** Real loading detail shown in the footer. */
+  detailLabel?: string;
 }
 
 // ─── colour helpers ──────────────────────────────────────────────────────────
@@ -46,6 +52,14 @@ function boxFillLevel(progress: number, i: number): number {
   return Math.min(1, Math.max(0, v));
 }
 
+function clampProgress(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, value));
+}
+
 // ─── phase type ─────────────────────────────────────────────────────────────
 
 type Phase = "simulating" | "completing" | "holding" | "fading";
@@ -58,28 +72,96 @@ export default function BoxLoadingPreloader({
   deviceId,
   label = "LOADER",
   contained = false,
+  progress,
+  statusLabel,
+  detailLabel,
 }: BoxLoadingPreloaderProps) {
-  const [progress, setProgress] = useState(0);
+  const [displayProgress, setDisplayProgress] = useState(() =>
+    clampProgress(progress ?? 0),
+  );
   const [opacity, setOpacity] = useState(1);
 
+  const controlledProgress =
+    typeof progress === "number" ? clampProgress(progress) : null;
+  const isControlled = controlledProgress !== null;
   const phase = useRef<Phase>("simulating");
   const simInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const rafId = useRef<number | null>(null);
+  const holdTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fadeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const progressRef = useRef(0); // mirror for use inside RAF callbacks
 
   const updateProgress = useCallback((p: number) => {
-    progressRef.current = p;
-    setProgress(p);
+    const next = clampProgress(p);
+    progressRef.current = next;
+    setDisplayProgress(next);
   }, []);
+
+  const clearTimers = useCallback(() => {
+    if (simInterval.current) clearInterval(simInterval.current);
+    if (rafId.current) cancelAnimationFrame(rafId.current);
+    if (holdTimeout.current) clearTimeout(holdTimeout.current);
+    if (fadeTimeout.current) clearTimeout(fadeTimeout.current);
+  }, []);
+
+  const startFadeOut = useCallback(() => {
+    holdTimeout.current = setTimeout(() => {
+      phase.current = "fading";
+      setOpacity(0);
+      fadeTimeout.current = setTimeout(onDone, 380);
+    }, 700);
+  }, [onDone]);
+
+  const animateToCompletion = useCallback(
+    (duration: number) => {
+      clearTimers();
+      phase.current = "completing";
+
+      const start = Date.now();
+      const startProgress = progressRef.current;
+
+      function tick() {
+        const elapsed = Date.now() - start;
+        const t = Math.min(1, elapsed / duration);
+        const eased = 1 - Math.pow(1 - t, 3);
+        updateProgress(startProgress + (100 - startProgress) * eased);
+
+        if (t < 1) {
+          rafId.current = requestAnimationFrame(tick);
+          return;
+        }
+
+        phase.current = "holding";
+        startFadeOut();
+      }
+
+      rafId.current = requestAnimationFrame(tick);
+    },
+    [clearTimers, startFadeOut, updateProgress],
+  );
+
+  // ── Controlled mode: reflect real progress pushed by the caller ──────────
+  useEffect(() => {
+    if (!isControlled || controlledProgress === null) {
+      return;
+    }
+
+    setOpacity(1);
+    updateProgress(controlledProgress);
+  }, [controlledProgress, isControlled, updateProgress]);
 
   // ── Phase 1: simulate 0 → ~88 % while the API is in flight ──────────────
   useEffect(() => {
-    phase.current = "simulating";
-    updateProgress(0);
+    if (isControlled) {
+      return;
+    }
 
+    phase.current = "simulating";
+    setOpacity(1);
+    updateProgress(0);
     simInterval.current = setInterval(() => {
       if (phase.current !== "simulating") return;
-      setProgress((prev) => {
+      setDisplayProgress((prev) => {
         const remaining = 88 - prev;
         const increment = Math.max(0.12, remaining * 0.032);
         const next = Math.min(88, prev + increment);
@@ -89,49 +171,24 @@ export default function BoxLoadingPreloader({
     }, 80);
 
     return () => {
-      if (simInterval.current) clearInterval(simInterval.current);
-      if (rafId.current) cancelAnimationFrame(rafId.current);
+      clearTimers();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentionally only on mount
+  }, [clearTimers, isControlled, updateProgress]);
 
   // ── Phase 2: loading finished → race to 100 %, hold, fade ───────────────
   useEffect(() => {
     if (loading) return; // still fetching
-    if (phase.current !== "simulating") return; // already completing
+    if (phase.current === "holding" || phase.current === "fading") return;
 
-    phase.current = "completing";
-    if (simInterval.current) clearInterval(simInterval.current);
+    animateToCompletion(isControlled ? 220 : 520);
+  }, [animateToCompletion, isControlled, loading]);
 
-    const start = Date.now();
-    const startProgress = progressRef.current;
-    const duration = 520; // ms to reach 100 %
+  useEffect(() => () => clearTimers(), [clearTimers]);
 
-    function tick() {
-      const elapsed = Date.now() - start;
-      const t = Math.min(1, elapsed / duration);
-      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
-      updateProgress(startProgress + (100 - startProgress) * eased);
-
-      if (t < 1) {
-        rafId.current = requestAnimationFrame(tick);
-      } else {
-        // ── Phase 3: hold at 100 % ─────────────────────────────────────
-        phase.current = "holding";
-        setTimeout(() => {
-          // ── Phase 4: fade out ──────────────────────────────────────
-          phase.current = "fading";
-          setOpacity(0);
-          setTimeout(onDone, 380); // matches CSS transition duration below
-        }, 700);
-      }
-    }
-
-    rafId.current = requestAnimationFrame(tick);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading]);
-
-  const pct = Math.round(progress);
+  const pct = Math.round(displayProgress);
+  const footerDetail =
+    detailLabel ??
+    (deviceId !== undefined ? `Device #${deviceId}` : "Fetching data");
 
   // ── overlay position: fixed (full-screen) or absolute (contained) ────────
   const overlayStyle: React.CSSProperties = {
@@ -201,6 +258,23 @@ export default function BoxLoadingPreloader({
           </div>
         </div>
 
+        {statusLabel ? (
+          <div
+            style={{
+              marginBottom: "14px",
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+              fontSize: "11px",
+              fontWeight: 600,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              color: "#6B7280",
+            }}
+          >
+            {statusLabel}
+          </div>
+        ) : null}
+
         {/* ── 10 boxes row ── */}
         <div aria-hidden="true" style={{ display: "flex", gap: "7px" }}>
           {Array.from({ length: 10 }, (_, i) => (
@@ -210,7 +284,7 @@ export default function BoxLoadingPreloader({
                 width: "44px",
                 height: "44px",
                 borderRadius: "10px",
-                backgroundColor: boxColor(boxFillLevel(progress, i)),
+                backgroundColor: boxColor(boxFillLevel(displayProgress, i)),
                 flexShrink: 0,
                 transition: "background-color 0.08s linear",
               }}
@@ -237,7 +311,7 @@ export default function BoxLoadingPreloader({
               color: "#ABABAB",
             }}
           >
-            {deviceId !== undefined ? `Device #${deviceId}` : "Fetching data"}
+            {footerDetail}
           </span>
 
           <span

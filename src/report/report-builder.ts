@@ -187,6 +187,7 @@ export function buildReport(
             const operatorName = details.start_name || "Unknown";
             woBreakdowns.push({
                 woId: details.wo_id_str,
+                deviceId: details.device_id,
                 partNo: details.part_no,
                 operator: operatorName,
                 setting: details.setting,

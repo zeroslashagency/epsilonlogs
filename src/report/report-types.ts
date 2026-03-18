@@ -262,6 +262,7 @@ export interface ReportConfig {
 
 export interface WoBreakdown {
     woId: string;
+    deviceId: number;
     partNo: string;
     operator: string;
     setting: string;

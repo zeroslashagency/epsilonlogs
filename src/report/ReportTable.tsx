@@ -2,6 +2,7 @@ import React from "react";
 import { ReportRow } from "./report-types";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { formatDuration } from "./format-utils";
 import {
   CheckCircle2,
   Loader2,
@@ -18,6 +19,9 @@ import {
   Package,
   TimerOff,
 } from "lucide-react";
+import { getMachineLabel } from "./machine-config";
+import type { PersonnelOverlapCompareWindow } from "./personnel-report-utils";
+import type { WoDetails } from "./report-types";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -36,6 +40,63 @@ function fmtTime(d: Date): string {
   const min = String(d.getMinutes()).padStart(2, "0");
   const ss = String(d.getSeconds()).padStart(2, "0");
   return `${dd}/${mm}/${yyyy}  ${hh}:${min}:${ss}`;
+}
+
+const COMPARE_LANE_GRID_TEMPLATE =
+  "52px 70px 104px 96px 112px 112px minmax(220px,1fr) 120px 120px 140px";
+
+function buildWoDetailsByWoIdStr(
+  woDetailsMap?: Map<number, WoDetails>,
+): Map<string, WoDetails> {
+  const byWoIdStr = new Map<string, WoDetails>();
+
+  if (!woDetailsMap) {
+    return byWoIdStr;
+  }
+
+  for (const details of woDetailsMap.values()) {
+    if (details.wo_id_str) {
+      byWoIdStr.set(details.wo_id_str, details);
+    }
+  }
+
+  return byWoIdStr;
+}
+
+function resolveRowMachineLabel(
+  row: ReportRow,
+  woDetailsByWoIdStr?: Map<string, WoDetails>,
+): string {
+  const deviceId =
+    row.originalLog?.device_id ??
+    row.woHeaderData?.deviceId ??
+    row.woSummaryData?.deviceId;
+
+  if (typeof deviceId === "number" && deviceId > 0) {
+    return getMachineLabel(deviceId);
+  }
+
+  const woId = row.woSpecs?.woId;
+  if (woId && woDetailsByWoIdStr) {
+    const details = woDetailsByWoIdStr.get(woId);
+    if (details && typeof details.device_id === "number" && details.device_id > 0) {
+      return getMachineLabel(details.device_id);
+    }
+  }
+
+  return "—";
+}
+
+function MachineCell({ label }: { label: string }) {
+  if (!label || label === "—") {
+    return <span className="text-slate-300 text-xs">—</span>;
+  }
+
+  return (
+    <span className="inline-flex items-center rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-[4px] text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-700 whitespace-nowrap">
+      {label}
+    </span>
+  );
 }
 
 /* ─── Action Badge ───────────────────────────────────────────────────────── */
@@ -477,9 +538,10 @@ function SummaryCell({ row }: { row: ReportRow }) {
 
 function WoHeaderRow({ row }: { row: ReportRow }) {
   const h = row.woHeaderData!;
+  const machineLabel = getMachineLabel(h.deviceId);
   return (
     <tr>
-      <td colSpan={10} className="p-0">
+      <td colSpan={11} className="p-0">
         <div
           className="px-5 py-3.5"
           style={{
@@ -518,9 +580,9 @@ function WoHeaderRow({ row }: { row: ReportRow }) {
               <span className="text-blue-300 font-medium">Setting:</span>
               <span className="text-white font-bold">{fmt(h.setting)}</span>
             </div>
-            <span className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-900/40 text-blue-200 text-[9px] font-semibold border border-blue-700/40">
+            <span className="ml-auto inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-900/40 text-blue-200 text-[9px] font-semibold border border-blue-700/40">
               <Cpu className="h-2.5 w-2.5" />
-              Device {h.deviceId}
+              {machineLabel}
             </span>
             {h.startComment && (
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/10 text-blue-100 text-[10px] italic border border-white/15">
@@ -538,9 +600,10 @@ function WoHeaderRow({ row }: { row: ReportRow }) {
 
 function WoSummaryRow({ row }: { row: ReportRow }) {
   const s = row.woSummaryData!;
+  const machineLabel = getMachineLabel(s.deviceId);
   return (
     <tr>
-      <td colSpan={10} className="p-0">
+      <td colSpan={11} className="p-0">
         <div
           className="px-5 py-3"
           style={{
@@ -569,6 +632,9 @@ function WoSummaryRow({ row }: { row: ReportRow }) {
             <div className="flex-1 flex flex-col items-center justify-center gap-1.5">
               <div className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.15em]">
                 WO #{s.woIdStr} — Summary
+              </div>
+              <div className="rounded-full border border-cyan-700/40 bg-cyan-900/35 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-200">
+                {machineLabel}
               </div>
               <div className="flex items-end gap-4 flex-wrap justify-center">
                 {(
@@ -660,6 +726,7 @@ function TableHead() {
     { label: "#", w: "w-10", align: "text-center" },
     { label: "Log ID", w: "w-16", align: "text-left" },
     { label: "Log Time", w: "w-44", align: "text-left" },
+    { label: "Machine", w: "w-28", align: "text-left" },
     { label: "Action", w: "w-36", align: "text-left" },
     { label: "Duration", w: "w-32", align: "text-left" },
     { label: "Label", w: "w-36", align: "text-center" },
@@ -693,15 +760,386 @@ function TableHead() {
   );
 }
 
+function getRowVisualState(
+  row: ReportRow,
+  idx: number,
+  visibleRows: ReportRow[],
+) {
+  const isFirstInBlock =
+    !!row.jobBlockLabel &&
+    (idx === 0 || visibleRows[idx - 1]?.jobBlockLabel !== row.jobBlockLabel);
+  const isLastInBlock =
+    !!row.jobBlockLabel &&
+    (idx === visibleRows.length - 1 ||
+      visibleRows[idx + 1]?.jobBlockLabel !== row.jobBlockLabel);
+  const isInBlock = !!row.jobBlockLabel;
+
+  const accentBorder =
+    row.action === "WO_START"
+      ? "border-l-[3px] border-l-indigo-400"
+      : row.action === "WO_STOP"
+        ? "border-l-[3px] border-l-rose-400"
+        : row.action === "WO_PAUSE"
+          ? "border-l-[3px] border-l-amber-400"
+          : row.action === "WO_RESUME"
+            ? "border-l-[3px] border-l-blue-400"
+            : row.action === "SPINDLE_ON"
+              ? "border-l-[3px] border-l-teal-400"
+              : row.action === "SPINDLE_OFF"
+                ? "border-l-[3px] border-l-slate-400"
+                : row.action === "MTR_ON"
+                  ? "border-l-[3px] border-l-orange-400"
+                  : row.action === "MTR_OFF"
+                    ? "border-l-[3px] border-l-orange-600"
+                    : row.action === "KEY_ON" || row.action === "KEY_OFF"
+                      ? "border-l-[3px] border-l-cyan-400"
+                      : row.isComputed
+                        ? "border-l-[3px] border-l-slate-200"
+                        : "";
+
+  const rowBg = isInBlock
+    ? undefined
+    : row.action === "WO_START"
+      ? "bg-indigo-50/60"
+      : row.action === "WO_STOP"
+        ? "bg-rose-50/40"
+        : row.action === "WO_PAUSE" || row.action === "WO_RESUME"
+          ? "bg-amber-50/50"
+          : row.action === "MTR_ON" || row.action === "MTR_OFF"
+            ? "bg-orange-50/40"
+            : row.action === "KEY_ON" || row.action === "KEY_OFF"
+              ? "bg-cyan-50/40"
+              : row.isComputed
+                ? "bg-slate-50/80"
+                : idx % 2 === 0
+                  ? "bg-white"
+                  : "bg-slate-50/40";
+
+  return {
+    isFirstInBlock,
+    isLastInBlock,
+    isInBlock,
+    accentBorder,
+    rowBg,
+  };
+}
+
+function CompareLaneHeader({
+  machineLabel,
+  woIdLabel,
+  jobType,
+  startTime,
+  endTime,
+}: {
+  machineLabel: string;
+  woIdLabel: string;
+  jobType: string;
+  startTime: string;
+  endTime: string;
+}) {
+  return (
+    <div className="border-l border-slate-700/80 bg-[linear-gradient(180deg,#1e293b_0%,#0f172a_100%)] px-4 py-3 text-slate-100">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
+          {machineLabel}
+        </span>
+        <span className="rounded-full border border-slate-600 bg-slate-900 px-3 py-1 text-[11px] font-semibold text-slate-100">
+          WO #{woIdLabel}
+        </span>
+        <JobTypeBadge jobType={jobType} />
+      </div>
+      <p className="mt-2 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
+        {fmt(startTime)} → {fmt(endTime)}
+      </p>
+      <div
+        className="mt-3 grid gap-2 text-[9px] font-bold uppercase tracking-[0.16em] text-slate-400"
+        style={{ gridTemplateColumns: COMPARE_LANE_GRID_TEMPLATE }}
+      >
+        <span>#</span>
+        <span>Log ID</span>
+        <span>Machine</span>
+        <span>Action</span>
+        <span>Duration</span>
+        <span>Label</span>
+        <span>Summary / Notes</span>
+        <span>WO Specs</span>
+        <span>Job Type</span>
+        <span>Operator</span>
+      </div>
+    </div>
+  );
+}
+
+function CompareLaneRows({
+  rows,
+  laneRows,
+  woDetailsByWoIdStr,
+}: {
+  rows: ReportRow[];
+  laneRows: ReportRow[];
+  woDetailsByWoIdStr: Map<string, WoDetails>;
+}) {
+  const laneVisibleRows = laneRows.filter(
+    (row) => !row.isPauseBanner && !row.isWoHeader && !row.isWoSummary,
+  );
+  const rowIndexMap = new Map(
+    laneVisibleRows.map((row, index) => [row.rowId, index] as const),
+  );
+
+  if (rows.length === 0) {
+    return <span className="text-slate-300 text-xs">—</span>;
+  }
+
+  return (
+    <div className="space-y-2">
+      {rows.map((row) => {
+        const rowIndex = rowIndexMap.get(row.rowId) ?? 0;
+        const { isFirstInBlock, isLastInBlock, isInBlock, accentBorder, rowBg } =
+          getRowVisualState(row, rowIndex, laneVisibleRows);
+
+        return (
+          <div
+            key={row.rowId}
+            className={cn(
+              "rounded-2xl border border-slate-200/80 px-3 py-2 shadow-[0_6px_18px_rgba(15,23,42,0.06)]",
+              rowBg,
+              accentBorder,
+              isFirstInBlock && "border-t-2 border-t-emerald-400",
+              isLastInBlock && "border-b-2 border-b-emerald-400",
+              isInBlock && "border-l-[3px] border-l-emerald-300 row-in-block-bg",
+              row.isComputed && "opacity-90",
+            )}
+          >
+            <div
+              className="grid gap-2"
+              style={{ gridTemplateColumns: COMPARE_LANE_GRID_TEMPLATE }}
+            >
+              <div className="flex items-start justify-center pt-0.5">
+                {row.sNo != null ? (
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-500 tabular-nums">
+                    {row.sNo}
+                  </span>
+                ) : (
+                  <span className="text-slate-200 text-xs select-none">·</span>
+                )}
+              </div>
+
+              <div className="pt-1">
+                <span className="font-mono text-[11px] text-slate-600 tabular-nums">
+                  {row.logId ?? <span className="text-slate-300">—</span>}
+                </span>
+              </div>
+
+              <div className="pt-0.5">
+                <MachineCell
+                  label={resolveRowMachineLabel(row, woDetailsByWoIdStr)}
+                />
+              </div>
+
+              <div className="pt-0.5">
+                <ActionBadge action={row.action ?? undefined} />
+              </div>
+
+              <div className="pt-0.5">
+                {row.startRowData ? (
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                      Part No
+                    </span>
+                    <span className="font-mono text-[11px] font-bold text-slate-700">
+                      {fmt(row.startRowData.partNo)}
+                    </span>
+                  </div>
+                ) : row.stopRowData ? (
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-600">
+                      OK Qty
+                    </span>
+                    <span className="font-mono text-[11px] font-bold text-emerald-700">
+                      {fmt(row.stopRowData.ok)}
+                    </span>
+                  </div>
+                ) : row.durationText ? (
+                  <DurationChip
+                    durationText={row.durationText ?? undefined}
+                    varianceColor={row.varianceColor ?? undefined}
+                  />
+                ) : (
+                  <span className="text-slate-200 text-xs select-none">—</span>
+                )}
+              </div>
+
+              <div className="flex items-start justify-center pt-0.5">
+                {row.startRowData ? (
+                  <div className="flex flex-col gap-0.5 items-center">
+                    <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                      Allotted
+                    </span>
+                    <span className="text-[11px] font-bold text-blue-700">
+                      {row.startRowData.allotted}
+                    </span>
+                  </div>
+                ) : row.stopRowData ? (
+                  <div className="flex flex-col gap-0.5 items-center">
+                    <span className="text-[9px] font-bold uppercase tracking-widest text-rose-500">
+                      Rej Qty
+                    </span>
+                    <span className="text-[11px] font-bold text-rose-700">
+                      {fmt(row.stopRowData.reject)}
+                    </span>
+                  </div>
+                ) : (
+                  <LabelBadge
+                    label={row.label ?? undefined}
+                    jobBlockLabel={row.jobBlockLabel ?? undefined}
+                    isFirstInBlock={isFirstInBlock ?? undefined}
+                  />
+                )}
+              </div>
+
+              <div className="pt-0.5">
+                <SummaryCell row={row} />
+              </div>
+
+              <div className="pt-0.5">
+                <WoSpecsCell woSpecs={row.woSpecs ?? undefined} />
+              </div>
+
+              <div className="pt-0.5">
+                <JobTypeBadge jobType={String(row.jobType ?? "")} />
+              </div>
+
+              <div className="pt-0.5">
+                <OperatorCell name={row.operatorName ?? undefined} />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface ReportCompareMatrixProps {
+  windows: PersonnelOverlapCompareWindow[];
+  woDetailsMap?: Map<number, WoDetails>;
+}
+
+export function ReportCompareMatrix({
+  windows,
+  woDetailsMap,
+}: ReportCompareMatrixProps) {
+  const woDetailsByWoIdStr = React.useMemo(
+    () => buildWoDetailsByWoIdStr(woDetailsMap),
+    [woDetailsMap],
+  );
+
+  if (windows.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-5">
+      {windows.map((window) => {
+        const gridTemplateColumns = `132px repeat(${window.lanes.length}, minmax(900px, 1fr))`;
+
+        return (
+          <div
+            key={window.id}
+            className="rounded-2xl overflow-hidden border border-slate-200/80"
+            style={{
+              boxShadow:
+                "0 16px 48px -8px rgba(15,23,42,0.14), 0 4px 16px -4px rgba(15,23,42,0.08), 0 0 0 1px rgba(15,23,42,0.04)",
+            }}
+          >
+            <div className="h-[3px] bg-gradient-to-r from-indigo-500 via-violet-500 to-indigo-400" />
+            <div className="overflow-x-auto thin-scrollbar">
+              <div className="min-w-max">
+                <div
+                  className="grid"
+                  style={{ gridTemplateColumns }}
+                >
+                  <div className="bg-[linear-gradient(180deg,#1e293b_0%,#0f172a_100%)] px-3 py-3 text-center text-slate-300 border-r border-slate-700/80">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.24em]">
+                      Time
+                    </p>
+                    <p className="mt-2 text-[11px] font-semibold text-slate-100">
+                      {fmtTime(new Date(window.startTime))}
+                    </p>
+                    <p className="mt-1 text-[11px] font-semibold text-slate-100">
+                      {fmtTime(new Date(window.endTime))}
+                    </p>
+                    <p className="mt-2 text-[10px] text-slate-400">
+                      {formatDuration(window.durationSec)} overlap
+                    </p>
+                  </div>
+                  {window.lanes.map((lane) => (
+                    <CompareLaneHeader
+                      key={lane.key}
+                      machineLabel={getMachineLabel(lane.deviceId)}
+                      woIdLabel={lane.woIdLabel}
+                      jobType={lane.jobType}
+                      startTime={lane.startTime}
+                      endTime={lane.endTime}
+                    />
+                  ))}
+                </div>
+
+                {window.slots.map((slot) => (
+                  <div
+                    key={`${window.id}-${slot.timestamp}`}
+                    className="grid border-t border-slate-200/80"
+                    style={{ gridTemplateColumns }}
+                  >
+                    <div className="border-r border-slate-200/80 bg-slate-50 px-3 py-4 text-center">
+                      <p className="font-mono text-[12px] font-semibold text-slate-700">
+                        {fmtTime(new Date(slot.timestamp))}
+                      </p>
+                    </div>
+                    {window.lanes.map((lane) => (
+                      <div
+                        key={`${window.id}-${slot.timestamp}-${lane.key}`}
+                        className="border-l border-slate-200/80 bg-white px-3 py-3"
+                      >
+                        <CompareLaneRows
+                          rows={slot.laneRows[lane.key] ?? []}
+                          laneRows={window.slots.flatMap(
+                            (windowSlot) => windowSlot.laneRows[lane.key] ?? [],
+                          )}
+                          woDetailsByWoIdStr={woDetailsByWoIdStr}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ─── Main Component ─────────────────────────────────────────────────────── */
 
 interface ReportTableProps {
   rows: ReportRow[];
   loading?: boolean;
   isFiltered?: boolean;
+  woDetailsMap?: Map<number, WoDetails>;
 }
 
-export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
+export function ReportTable({
+  rows,
+  loading,
+  isFiltered,
+  woDetailsMap,
+}: ReportTableProps) {
+  const woDetailsByWoIdStr = React.useMemo(
+    () => buildWoDetailsByWoIdStr(woDetailsMap),
+    [woDetailsMap],
+  );
   const visibleRows = rows.filter((row) => !row.isPauseBanner);
 
   if (visibleRows.length === 0) {
@@ -725,7 +1163,7 @@ export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
       {/* Top accent bar */}
       <div className="h-[3px] bg-gradient-to-r from-indigo-500 via-violet-500 to-indigo-400" />
       <div className="overflow-x-auto thin-scrollbar">
-        <table className="w-full min-w-[1060px] text-sm text-left border-collapse">
+        <table className="w-full min-w-[1160px] text-sm text-left border-collapse">
           <TableHead />
           <tbody>
             {visibleRows.map((row, idx) => {
@@ -833,6 +1271,13 @@ export function ReportTable({ rows, loading, isFiltered }: ReportTableProps) {
                     <span className="font-mono text-[11px] text-slate-700 font-medium tabular-nums">
                       {fmtTime(row.logTime)}
                     </span>
+                  </td>
+
+                  {/* Machine */}
+                  <td className="px-3 py-2.5 align-top">
+                    <MachineCell
+                      label={resolveRowMachineLabel(row, woDetailsByWoIdStr)}
+                    />
                   </td>
 
                   {/* Action */}
