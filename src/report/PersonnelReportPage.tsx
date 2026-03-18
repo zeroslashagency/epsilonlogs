@@ -1437,31 +1437,13 @@ export default function PersonnelReportPage() {
           boxShadow: "0 2px 12px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.04)",
         }}
       >
-        <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+        <div className="px-5 py-4 border-b border-slate-100">
           <div>
             <h2 className="text-base font-bold text-slate-800">Choose Person</h2>
             <p className="mt-1 text-sm text-slate-500">
               Load personnel first, then pick a person from the generated cards.
             </p>
           </div>
-
-          {personnelOptions.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => void handleGenerate()}
-              disabled={loadingStep !== null || !canGenerateReport}
-              className="inline-flex items-center gap-2 rounded-2xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {loadingStep === "report" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Play className="h-4 w-4" />
-              )}
-              {loadingStep === "report"
-                ? "Generating..."
-                : "Generate Personnel Report"}
-            </button>
-          ) : null}
         </div>
 
         <div className="p-5 space-y-5">
@@ -1585,6 +1567,26 @@ export default function PersonnelReportPage() {
             </>
           )}
         </div>
+
+        {personnelOptions.length > 0 ? (
+          <div className="flex justify-center border-t border-slate-100 px-5 pb-5 pt-4">
+            <button
+              type="button"
+              onClick={() => void handleGenerate()}
+              disabled={loadingStep !== null || !canGenerateReport}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-indigo-700 sm:w-auto disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loadingStep === "report" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
+              {loadingStep === "report"
+                ? "Generating..."
+                : "Generate Personnel Report"}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {error ? (
