@@ -1236,7 +1236,7 @@ export default function ProductionHubV2() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_1px_1px,#d6dbe3_1px,transparent_1px)] [background-size:20px_20px] p-2 text-slate-900 sm:p-4 dark:bg-none dark:bg-slate-950 dark:text-slate-100">
       <main className="mx-auto w-full max-w-none">
-        <section className="min-h-[calc(100vh-1rem)] w-full rounded-[28px] border border-slate-300 bg-[#dce3ec]/90 p-4 shadow-[0_20px_50px_-32px_rgba(15,23,42,0.6)] sm:min-h-[calc(100vh-2rem)] sm:p-6 dark:border-slate-700 dark:bg-slate-900 dark:shadow-[0_20px_50px_-32px_rgba(0,0,0,0.8)]">
+        <section className="min-h-[calc(100vh-1rem)] w-full sm:min-h-[calc(100vh-2rem)]">
           <header className="rounded-2xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
             <div className="flex flex-wrap items-center gap-2 text-xs sm:gap-3 sm:text-sm">
               <Link
@@ -1358,13 +1358,13 @@ export default function ProductionHubV2() {
                         )}`}
                       >
                         <div className="mb-3 flex items-start justify-between gap-2">
-                          <div className="flex items-start gap-2 text-xs text-slate-600">
-                            <span className="rounded-md bg-white/80 p-1.5">
-                              <PlaceholderIcon className="h-3.5 w-3.5" />
+                          <div className="flex items-start gap-3 text-sm text-slate-600">
+                            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/85 shadow-sm">
+                              <PlaceholderIcon className="h-5 w-5" />
                             </span>
                             <div className="flex flex-wrap gap-1">
                               <span
-                                className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${placeholderTagClass}`}
+                                className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ring-1 ${placeholderTagClass}`}
                               >
                                 {hasKnownJobType ? snapshot.jobTypeLabel : "No Active WO"}
                               </span>
@@ -1443,15 +1443,15 @@ export default function ProductionHubV2() {
                     >
                       <ExpandableTrigger className="w-full text-left">
                         <div className="mb-3 flex items-start justify-between gap-2">
-                          <div className="flex items-start gap-2 text-xs text-slate-600">
-                            <span className="rounded-md bg-white/80 p-1.5">
-                              <JobTypeIcon className="h-3.5 w-3.5" />
+                          <div className="flex items-start gap-3 text-sm text-slate-600">
+                            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/85 shadow-sm">
+                              <JobTypeIcon className="h-5 w-5" />
                             </span>
                             <div className="flex flex-wrap gap-1">
                               {card.jobTypeTags.slice(0, 3).map((jobTag) => (
                                 <span
                                   key={`${card.woId}-${jobTag.jobType}`}
-                                  className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${getWoOverviewJobTypeBadgeClass(jobTag.jobType)}`}
+                                  className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ring-1 ${getWoOverviewJobTypeBadgeClass(jobTag.jobType)}`}
                                 >
                                   {jobTag.jobType}
                                 </span>
