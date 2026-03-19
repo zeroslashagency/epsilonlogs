@@ -1153,6 +1153,13 @@ export default function PersonnelReportPage() {
 
         <div className="flex items-center gap-2">
           <Link
+            to="/dashboard"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-50 text-slate-600 text-xs font-medium border border-slate-200 hover:bg-slate-100 transition-colors"
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            Dashboard
+          </Link>
+          <Link
             to="/report"
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-slate-500 text-xs font-medium border border-slate-200 hover:bg-slate-200 transition-colors"
           >

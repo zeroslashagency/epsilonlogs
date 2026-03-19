@@ -9,7 +9,6 @@ import { Link } from "react-router-dom";
 import {
   BarChart3,
   Bell,
-  Download,
   Factory,
   Gauge,
   RefreshCcw,
@@ -45,11 +44,9 @@ import { WoReportPanel } from "./WoReportPanel";
 import {
   compareDashboardMachineOrder,
   DEFAULT_DASHBOARD_MACHINE_IDS,
-  mergeMachineIds,
-  parseManualMachineId,
   selectPreferredCardsPerMachine,
 } from "./wo-report-utils";
-import { getMachineLabel, getMachineType } from "../report/machine-config";
+import { getMachineLabel } from "../report/machine-config";
 import {
   buildMachineErrorSnapshot,
   buildMachineSnapshot,
@@ -99,17 +96,17 @@ interface WoCardSummary {
 
 type OverviewCardItem =
   | {
-      kind: "wo";
-      key: string;
-      machineId: number | null;
-      card: WoCardSummary;
-    }
+    kind: "wo";
+    key: string;
+    machineId: number | null;
+    card: WoCardSummary;
+  }
   | {
-      kind: "status";
-      key: string;
-      machineId: number;
-      snapshot: MachineSnapshot | null;
-    };
+    kind: "status";
+    key: string;
+    machineId: number;
+    snapshot: MachineSnapshot | null;
+  };
 
 interface WoAccumulator {
   woId: string;
@@ -149,33 +146,6 @@ const executionStatusBadgeClass: Record<WoExecutionStatus, string> = {
   PROCESSING: "bg-amber-100 text-amber-700 ring-amber-300",
   COMPLETE: "bg-emerald-100 text-emerald-700 ring-emerald-300",
 };
-
-const machineStatusChipClass: Record<MachineStatus, string> = {
-  LIVE: "bg-emerald-100 text-emerald-700",
-  SETTING: "bg-amber-100 text-amber-700",
-  MAINTENANCE: "bg-rose-100 text-rose-700",
-  CALIBRATION: "bg-cyan-100 text-cyan-700",
-  PAUSED: "bg-violet-100 text-violet-700",
-  IDLE: "bg-slate-100 text-slate-700",
-  OFFLINE: "bg-slate-100 text-slate-500",
-  ERROR: "bg-fuchsia-100 text-fuchsia-700",
-};
-
-const machineStatusDotClass: Record<MachineStatus, string> = {
-  LIVE: "bg-emerald-500 animate-pulse",
-  SETTING: "bg-amber-500",
-  MAINTENANCE: "bg-rose-500",
-  CALIBRATION: "bg-cyan-500",
-  PAUSED: "bg-violet-500",
-  IDLE: "bg-slate-500",
-  OFFLINE: "bg-slate-400",
-  ERROR: "bg-fuchsia-500",
-};
-
-const loadingMachineStatusChipClass =
-  "bg-slate-100 text-slate-500";
-const loadingMachineStatusDotClass =
-  "bg-slate-300 animate-pulse";
 
 const WO_OVERVIEW_STATUS_PRIORITY: Record<WoExecutionStatus, number> = {
   LIVE: 0,
@@ -531,11 +501,6 @@ export default function ProductionHubV2() {
   const [deviceNameMap, setDeviceNameMap] = useState<Map<number, string>>(
     new Map(),
   );
-  const [customMachineIds, setCustomMachineIds] = useState<number[]>([]);
-  const [manualMachineInput, setManualMachineInput] = useState("");
-  const [manualMachineError, setManualMachineError] = useState<string | null>(
-    null,
-  );
 
   const [allRows, setAllRows] = useState<ReportRow[]>([]);
   const [machineSnapshots, setMachineSnapshots] = useState<MachineSnapshot[]>(
@@ -558,11 +523,7 @@ export default function ProductionHubV2() {
   );
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const activeMachineIds = useMemo(
-    () =>
-      mergeMachineIds(DEFAULT_DASHBOARD_MACHINE_IDS, customMachineIds),
-    [customMachineIds],
-  );
+  const activeMachineIds = DEFAULT_DASHBOARD_MACHINE_IDS;
 
   const machineSnapshotMap = useMemo(
     () => new Map(machineSnapshots.map((snapshot) => [snapshot.machineId, snapshot])),
@@ -581,9 +542,9 @@ export default function ProductionHubV2() {
     return allRows.filter((row) => {
       const wo = String(
         row.originalLog?.wo_name ||
-          row.woSpecs?.woId ||
-          row.originalLog?.wo_id ||
-          "",
+        row.woSpecs?.woId ||
+        row.originalLog?.wo_id ||
+        "",
       ).toLowerCase();
       const operator = (row.operatorName || "").toLowerCase();
       const action = (row.action || "").toLowerCase();
@@ -680,49 +641,49 @@ export default function ProductionHubV2() {
 
     return selectPreferredCardsPerMachine(
       [...grouped.values()]
-      .sort((left, right) => right.latestTimestamp - left.latestTimestamp)
-      .slice(0, TOP_WO_LIMIT)
-      .map((entry) => {
-        const orderedJobTags = [...entry.jobTypeFirstSeen.entries()]
-          .sort((left, right) => {
-            return left[1] - right[1];
-          })
-          .map(([jobType]) => ({
-            jobType,
-          }));
+        .sort((left, right) => right.latestTimestamp - left.latestTimestamp)
+        .slice(0, TOP_WO_LIMIT)
+        .map((entry) => {
+          const orderedJobTags = [...entry.jobTypeFirstSeen.entries()]
+            .sort((left, right) => {
+              return left[1] - right[1];
+            })
+            .map(([jobType]) => ({
+              jobType,
+            }));
 
-        const visibleTags = orderedJobTags.filter(
-          (tag) => tag.jobType !== "Unknown",
-        );
-        const status = resolveExecutionStatus(entry);
-        return {
-          woId: entry.woId,
-          woDisplayId: entry.woDisplayId,
-          machineId: entry.machineId,
-          operatorName: entry.operatorName,
-          jobType: entry.jobType,
-          executionStatus: status,
-          pclText: entry.pclText,
-          totalCycles: entry.totalCycles,
-          goodCycles: entry.goodCycles,
-          warningCycles: entry.warningCycles,
-          badCycles: entry.badCycles,
-          unknownCycles: entry.unknownCycles,
-          totalCycleSec: entry.totalCycleSec,
-          totalDurationSec: entry.totalDurationSec,
-          avgCycleSec:
-            entry.totalCycles > 0
-              ? Math.round(entry.totalCycleSec / entry.totalCycles)
-              : 0,
-          latestTimestamp: entry.latestTimestamp,
-          latestEvent: entry.latestEvent,
-          latestClassification: entry.latestClassification,
-          latestDurationText: entry.latestDurationText,
-          latestReason: entry.latestReason,
-          jobTypeTags:
-            visibleTags.length > 0 ? visibleTags : [{ jobType: entry.jobType }],
-        };
-      }),
+          const visibleTags = orderedJobTags.filter(
+            (tag) => tag.jobType !== "Unknown",
+          );
+          const status = resolveExecutionStatus(entry);
+          return {
+            woId: entry.woId,
+            woDisplayId: entry.woDisplayId,
+            machineId: entry.machineId,
+            operatorName: entry.operatorName,
+            jobType: entry.jobType,
+            executionStatus: status,
+            pclText: entry.pclText,
+            totalCycles: entry.totalCycles,
+            goodCycles: entry.goodCycles,
+            warningCycles: entry.warningCycles,
+            badCycles: entry.badCycles,
+            unknownCycles: entry.unknownCycles,
+            totalCycleSec: entry.totalCycleSec,
+            totalDurationSec: entry.totalDurationSec,
+            avgCycleSec:
+              entry.totalCycles > 0
+                ? Math.round(entry.totalCycleSec / entry.totalCycles)
+                : 0,
+            latestTimestamp: entry.latestTimestamp,
+            latestEvent: entry.latestEvent,
+            latestClassification: entry.latestClassification,
+            latestDurationText: entry.latestDurationText,
+            latestReason: entry.latestReason,
+            jobTypeTags:
+              visibleTags.length > 0 ? visibleTags : [{ jobType: entry.jobType }],
+          };
+        }),
       WO_OVERVIEW_STATUS_PRIORITY,
     )
       .sort((left, right) => {
@@ -856,9 +817,9 @@ export default function ProductionHubV2() {
       selectedWoDetails && selectedWoDetails.duration > 0
         ? selectedWoDetails.duration
         : Math.max(
-            0,
-            Math.round((latestRow.timestamp - oldestRow.timestamp) / 1000),
-          );
+          0,
+          Math.round((latestRow.timestamp - oldestRow.timestamp) / 1000),
+        );
 
     const startComment =
       (hasText(selectedWoDetails?.start_comment)
@@ -1195,33 +1156,9 @@ export default function ProductionHubV2() {
   const selectedWoGoodRate =
     selectedWoCard && selectedWoCard.totalCycles > 0
       ? Math.round(
-          (selectedWoCard.goodCycles / selectedWoCard.totalCycles) * 100,
-        )
+        (selectedWoCard.goodCycles / selectedWoCard.totalCycles) * 100,
+      )
       : 0;
-
-  const addManualMachine = () => {
-    const parsedMachineId = parseManualMachineId(manualMachineInput);
-    if (!parsedMachineId) {
-      setManualMachineError("Enter a valid numeric machine ID.");
-      return;
-    }
-
-    if (activeMachineIds.includes(parsedMachineId)) {
-      setManualMachineError(`Machine ${parsedMachineId} is already active.`);
-      return;
-    }
-
-    setCustomMachineIds((prev) => [...prev, parsedMachineId]);
-    setManualMachineInput("");
-    setManualMachineError(null);
-  };
-
-  const removeManualMachine = (machineIdToRemove: number) => {
-    setCustomMachineIds((prev) =>
-      prev.filter((machineId) => machineId !== machineIdToRemove),
-    );
-    setManualMachineError(null);
-  };
 
   const closeOverlay = () => {
     setIsOverlayOpen(false);
@@ -1285,206 +1222,66 @@ export default function ProductionHubV2() {
     setDetailStage(2);
     setIsOverlayOpen(false);
   };
+  const overviewSummaryLabel =
+    searchQuery.trim().length > 0
+      ? `Today live board · ${overviewCards.length} matching WOs`
+      : `Today live board · Showing ${visibleOverviewMachineIds.length} machines`;
+  const overviewAgeLabel =
+    loading && !lastRefreshed
+      ? "Updating..."
+      : lastRefreshed
+        ? `Updated ${formatRelativeLogAge(lastRefreshed)}`
+        : "Waiting for first sync";
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_1px_1px,#d6dbe3_1px,transparent_1px)] [background-size:20px_20px] p-2 text-slate-900 sm:p-4 dark:bg-none dark:bg-slate-950 dark:text-slate-100">
       <main className="mx-auto w-full max-w-none">
         <section className="min-h-[calc(100vh-1rem)] w-full rounded-[28px] border border-slate-300 bg-[#dce3ec]/90 p-4 shadow-[0_20px_50px_-32px_rgba(15,23,42,0.6)] sm:min-h-[calc(100vh-2rem)] sm:p-6 dark:border-slate-700 dark:bg-slate-900 dark:shadow-[0_20px_50px_-32px_rgba(0,0,0,0.8)]">
           <header className="rounded-2xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
-                Logo
-              </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs sm:gap-3 sm:text-sm">
+              <Link
+                to="/dashboard"
+                className="inline-flex h-9 items-center rounded-md bg-slate-900 px-3 font-medium text-white"
+              >
+                Dashboard
+              </Link>
+              <Link
+                to="/report"
+                className="inline-flex h-9 items-center rounded-md px-3 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                Machine Report
+              </Link>
+              <Link
+                to="/report/personnel"
+                className="inline-flex h-9 items-center rounded-md px-3 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                Personnel Report
+              </Link>
 
-              <nav className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
-                <span className="rounded-md bg-slate-900 px-2.5 py-1.5 font-medium text-white">
-                  Dashboard
-                </span>
-                <Link
-                  to="/report"
-                  className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-slate-600 hover:bg-slate-100"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Device Logs Report
-                </Link>
-              </nav>
-
-              <div className="ml-auto flex min-w-[240px] items-center gap-2">
-                <div className="relative flex-1">
+              <div className="ml-auto flex min-w-[240px] flex-wrap items-center justify-end gap-2">
+                <div className="relative w-full max-w-[220px] sm:w-[220px]">
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
                   <input
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                     placeholder="Search WO..."
-                    className="h-9 w-full rounded-md border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-slate-300 focus:outline-none"
+                    className="h-9 w-full rounded-md border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-slate-300 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500"
                   />
                 </div>
                 <button
                   type="button"
-                  className="rounded-md border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700"
                 >
                   <Bell className="h-4 w-4" />
                 </button>
                 <ThemeToggle />
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-700/50 dark:text-slate-300">
+                <span className="inline-flex h-9 items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-700/50 dark:text-slate-300">
                   <User className="h-3.5 w-3.5" />
                   epsilon
                 </span>
               </div>
             </div>
           </header>
-
-          <section className="mt-4 rounded-2xl border border-slate-200 bg-white/85 px-3 py-3 sm:px-4 dark:border-slate-700 dark:bg-slate-800/90">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                  Live Today Board
-                </p>
-                <p className="mt-0.5 text-sm text-slate-700">
-                  Today only · All dashboard machines
-                </p>
-              </div>
-
-              <Link
-                to="/report"
-                className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800 sm:text-sm"
-              >
-                <Download className="h-3.5 w-3.5" />
-                Open /report
-              </Link>
-
-              <button
-                type="button"
-                onClick={() => {
-                  void fetchData({ force: true });
-                }}
-                disabled={loading}
-                className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-60 sm:text-sm"
-              >
-                <RefreshCcw
-                  className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`}
-                />
-                Refresh
-              </button>
-            </div>
-
-            <div className="mt-2 text-xs text-slate-500">
-              Live: {loading && !lastRefreshed ? "loading..." : compactTime(lastRefreshed)}
-            </div>
-
-            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    Dashboard Machines
-                  </p>
-                  <p className="mt-1 text-sm text-slate-600">
-                    Core machines stay active. Add any extra machine ID manually for
-                    dashboard coverage.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    value={manualMachineInput}
-                    onChange={(event) => {
-                      setManualMachineInput(event.target.value);
-                      if (manualMachineError) {
-                        setManualMachineError(null);
-                      }
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        addManualMachine();
-                      }
-                    }}
-                    placeholder="Add machine ID"
-                    className="h-9 w-[150px] rounded-xl border border-slate-200 bg-white px-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-slate-300 focus:outline-none sm:text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={addManualMachine}
-                    className="inline-flex h-9 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-100 sm:text-sm"
-                  >
-                    Add Machine
-                  </button>
-                </div>
-              </div>
-
-              {/* Machine badges keep the existing layout, but status now comes from direct machine snapshots. */}
-              <div className="mt-3 flex flex-wrap gap-2">
-                {activeMachineIds.map((machineId) => {
-                  const isCustomMachine = customMachineIds.includes(machineId);
-                  const machineType = getMachineType(machineId);
-                  const snapshot = machineSnapshotMap.get(machineId);
-                  const status = snapshot?.status ?? null;
-                  const statusLabel = snapshot?.statusLabel ?? (loading ? "Loading" : "Offline");
-                  const statusDotClass = status
-                    ? machineStatusDotClass[status]
-                    : loading
-                      ? loadingMachineStatusDotClass
-                      : machineStatusDotClass.OFFLINE;
-                  const statusChipClass = status
-                    ? machineStatusChipClass[status]
-                    : loading
-                      ? loadingMachineStatusChipClass
-                      : machineStatusChipClass.OFFLINE;
-                  const statusTitle =
-                    snapshot?.statusMessage ??
-                    (loading
-                      ? "Loading live machine data..."
-                      : "No recent machine data.");
-
-                  return (
-                    <span
-                      key={machineId}
-                      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
-                        isCustomMachine
-                          ? "border-cyan-200 bg-cyan-50 text-cyan-700"
-                          : machineType === 'VMC'
-                          ? "border-blue-200 bg-blue-50 text-blue-700"
-                          : machineType === 'CNC'
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                          : "border-slate-200 bg-white text-slate-700"
-                      }`}
-                    >
-                      {/* Live status dot */}
-                      <span
-                        className={`h-2 w-2 rounded-full flex-shrink-0 ${statusDotClass}`}
-                        title={statusTitle}
-                      />
-                      <span className="font-semibold">
-                        {getMachineLabel(machineId)}
-                      </span>
-                      <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                        {isCustomMachine ? "manual" : "core"}
-                      </span>
-                      <span
-                        className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusChipClass}`}
-                      >
-                        {statusLabel}
-                      </span>
-                      {isCustomMachine ? (
-                        <button
-                          type="button"
-                          onClick={() => removeManualMachine(machineId)}
-                          className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                          aria-label={`Remove machine ${machineId}`}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      ) : null}
-                    </span>
-                  );
-                })}
-              </div>
-
-              {manualMachineError ? (
-                <p className="mt-2 text-xs text-rose-600">{manualMachineError}</p>
-              ) : null}
-            </div>
-          </section>
 
           {error ? (
             <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -1495,19 +1292,32 @@ export default function ProductionHubV2() {
           <section className="mt-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h1 className="text-lg font-semibold text-slate-800 sm:text-xl">
-                WO Overview
+                Machine Overview
               </h1>
-              <span className="rounded-full bg-white px-3 py-1 text-xs text-slate-500">
-                {searchQuery.trim().length > 0
-                  ? `Today live board · ${overviewCards.length} matching WOs`
-                  : `Today live board · Showing ${visibleOverviewMachineIds.length} machines`}
-              </span>
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-white px-3 py-1 text-xs text-slate-500">
+                  {overviewSummaryLabel} · {overviewAgeLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void fetchData({ force: true });
+                  }}
+                  disabled={loading}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 sm:text-sm"
+                >
+                  <RefreshCcw
+                    className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`}
+                  />
+                  Refresh
+                </button>
+              </div>
             </div>
 
             {loading &&
-            !lastRefreshed &&
-            topWoCards.length === 0 &&
-            machineSnapshots.length === 0 ? (
+              !lastRefreshed &&
+              topWoCards.length === 0 &&
+              machineSnapshots.length === 0 ? (
               <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
                 Loading dashboard data...
               </div>
@@ -1533,8 +1343,8 @@ export default function ProductionHubV2() {
                       : ShieldAlert;
                     const placeholderTagClass = hasKnownJobType
                       ? getWoOverviewJobTypeBadgeClass(
-                          snapshot.jobTypeLabel as WoJobType,
-                        )
+                        snapshot.jobTypeLabel as WoJobType,
+                      )
                       : "bg-slate-100 text-slate-700 ring-slate-300";
                     const currentWoLabel = snapshot?.currentWoId
                       ? `WO-${snapshot.currentWoId}`
@@ -1804,7 +1614,7 @@ export default function ProductionHubV2() {
                   onClick={closeAllDetails}
                   className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-600 hover:bg-slate-50"
                 >
-                  1. WO Overview
+                  1. Machine Overview
                 </button>
                 <span
                   className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-600"

@@ -261,7 +261,7 @@ export default function ReportPage() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-slate-900 leading-tight">
-                Device Logs Report
+                Machine Report
               </h1>
               <p className="text-xs text-slate-400 mt-0.5">
                 Job Block analysis from raw device logs
@@ -270,6 +270,13 @@ export default function ReportPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            to="/dashboard"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-50 text-slate-600 text-xs font-medium border border-slate-200 hover:bg-slate-100 transition-colors"
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            Dashboard
+          </Link>
           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-medium border border-indigo-200">
             <FileText className="h-3.5 w-3.5" />
             Machine Report
