@@ -444,6 +444,9 @@ function resolveWoDetails(row: ReportRow, woDetailsMap: Map<number, WoDetails>):
 }
 
 function resolveExportAction(row: ReportRow): string {
+    if (typeof row.displayAction === 'string' && row.displayAction.trim()) {
+        return row.displayAction;
+    }
     if (typeof row.action === 'string' && row.action.trim()) {
         return row.action;
     }
@@ -659,6 +662,11 @@ function resolveSummaryNotes(row: ReportRow, woDetails?: WoDetails): string {
     }
 
     switch (action) {
+        case 'M30_CHANGED': {
+            lines.push(`Actual Cycle: ${row.durationText || '—'}`);
+            lines.push(`Target PCL: ${pclText}`);
+            return lines.join('\n');
+        }
         case 'SPINDLE_OFF': {
             lines.push(`Actual Cycle: ${row.durationText || '—'}`);
             lines.push(`Target PCL: ${pclText}`);

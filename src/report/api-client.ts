@@ -3,9 +3,12 @@ import {
   DeviceLogEntry,
   ReportConfig,
   WoDetails,
+  WoSummaryApiResponse,
+  WoSummaryEntry,
 } from "./report-types";
 
 const API_BASE_URL = "/api/v2";
+const WO_API_BASE_URL = "/api/v1";
 
 interface DevicesApiResponse {
   success: boolean;
@@ -27,6 +30,104 @@ export interface WoDetailsFetchProgress {
   completed: number;
   total: number;
   woId: number;
+}
+
+export interface WoSummaryFetchConfig {
+  startDate: string;
+  endDate: string;
+  userId?: number;
+  deviceId?: number;
+}
+
+async function fetchWoSummaryPage(
+  page: number,
+  config: WoSummaryFetchConfig,
+  token: string,
+  signal?: AbortSignal,
+): Promise<{ workOrders: WoSummaryEntry[]; totalPages: number }> {
+  const params = new URLSearchParams({
+    start_date: config.startDate,
+    end_date: config.endDate,
+    page: String(page),
+  });
+
+  if (typeof config.userId === "number") {
+    params.set("user_id", String(config.userId));
+  }
+
+  if (typeof config.deviceId === "number") {
+    params.set("device_id", String(config.deviceId));
+  }
+
+  const response = await fetch(`${WO_API_BASE_URL}/wo?${params.toString()}`, {
+    method: "GET",
+    credentials: "omit",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    signal: signal ?? null,
+  });
+
+  if (!response.ok) {
+    throw new Error(`WO API Error: ${response.status} ${response.statusText}`);
+  }
+
+  const responseText = await response.text();
+  let json: WoSummaryApiResponse;
+
+  try {
+    json = JSON.parse(responseText) as WoSummaryApiResponse;
+  } catch {
+    throw new Error(
+      `WO API returned non-JSON response. Check /api/v1 proxy configuration.`,
+    );
+  }
+
+  if (!json.success || !json.result?.work_orders) {
+    throw new Error(json.error?.message ?? "Failed to fetch work orders");
+  }
+
+  return {
+    workOrders: json.result.work_orders.map((workOrder) => ({
+      id: workOrder.id || 0,
+      wo_id: String(workOrder.wo_id || workOrder.id || ""),
+      start_uid: workOrder.start_uid ?? null,
+      device_id: workOrder.device_id || 0,
+      setting: workOrder.setting || "",
+      start_time: workOrder.start_time || null,
+      end_time: workOrder.end_time || null,
+      part_no: workOrder.part_no || "",
+      alloted_qty: workOrder.alloted_qty || 0,
+      start_comment: workOrder.start_comment || "",
+      ok_qty: workOrder.ok_qty || 0,
+      reject_qty: workOrder.reject_qty || 0,
+      stop_comment: workOrder.stop_comment || "",
+      status: workOrder.status || "Unknown",
+      stop_uid: workOrder.stop_uid ?? null,
+      pcl: workOrder.pcl ?? null,
+      duration: workOrder.duration ?? null,
+      target_duration: workOrder.target_duration ?? null,
+      idle_time: workOrder.idle_time ?? null,
+    })),
+    totalPages: json.result.pagination?.total_pages ?? 1,
+  };
+}
+
+export async function fetchWoSummaries(
+  config: WoSummaryFetchConfig,
+  token: string,
+  signal?: AbortSignal,
+): Promise<WoSummaryEntry[]> {
+  const first = await fetchWoSummaryPage(1, config, token, signal);
+  const allWorkOrders = [...first.workOrders];
+
+  for (let page = 2; page <= first.totalPages; page += 1) {
+    const next = await fetchWoSummaryPage(page, config, token, signal);
+    allWorkOrders.push(...next.workOrders);
+  }
+
+  return allWorkOrders;
 }
 
 /**
@@ -221,6 +322,8 @@ export async function fetchWoDetails(
       time_saved: wo.time_saved ?? null,
       load_time: wo.load_time ?? null,
       idle_time: wo.idle_time ?? null,
+      battery_level: wo.battery_level ?? null,
+      status: wo.status ?? null,
     };
   } catch (error) {
     console.error(`Error fetching WO ${woId}:`, error);

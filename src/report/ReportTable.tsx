@@ -18,10 +18,13 @@ import {
   User,
   Package,
   TimerOff,
+  ChevronDown,
 } from "lucide-react";
 import { getMachineLabel } from "./machine-config";
 import type { PersonnelOverlapCompareWindow } from "./personnel-report-utils";
 import type { WoDetails } from "./report-types";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { Separator } from "@/components/ui/separator";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -79,12 +82,287 @@ function resolveRowMachineLabel(
   const woId = row.woSpecs?.woId;
   if (woId && woDetailsByWoIdStr) {
     const details = woDetailsByWoIdStr.get(woId);
-    if (details && typeof details.device_id === "number" && details.device_id > 0) {
+    if (
+      details &&
+      typeof details.device_id === "number" &&
+      details.device_id > 0
+    ) {
       return getMachineLabel(details.device_id);
     }
   }
 
   return "—";
+}
+
+type WorkOrderSpan = {
+  startRowId: string;
+  woId: string | undefined;
+  rows: ReportRow[];
+  startRow: ReportRow;
+  stopRow: ReportRow | undefined;
+  machineLabel: string;
+  operatorName: string | undefined;
+  jobType: string | undefined;
+  partNo: string | undefined;
+  setting: string | undefined;
+  startComment: string | undefined;
+  stopComment: string | undefined;
+  allottedQty: number | undefined;
+  okQty: number | undefined;
+  rejectQty: number | undefined;
+  logCount: number;
+  startTime: Date;
+  endTime: Date;
+  totalDurationText: string;
+  cuttingText: string;
+  loadingText: string;
+  pauseText: string;
+  idealText: string;
+  timelineText: string;
+};
+
+function getRowWoId(row: ReportRow): string | undefined {
+  const candidates = [
+    row.woSpecs?.woId,
+    typeof row.originalLog?.wo_id === "number"
+      ? String(row.originalLog.wo_id)
+      : undefined,
+    row.woHeaderData?.woIdStr,
+    row.woSummaryData?.woIdStr,
+  ];
+
+  return candidates.find((value) => !!value && value.trim().length > 0);
+}
+
+function formatDurationValue(seconds: number | null | undefined): string {
+  return typeof seconds === "number" && Number.isFinite(seconds)
+    ? formatDuration(Math.max(0, seconds))
+    : "—";
+}
+
+function buildTimelineText(rows: ReportRow[]): string {
+  const actions: string[] = [];
+
+  for (const row of rows) {
+    const action = getRowDisplayAction(row);
+    if (!action) {
+      continue;
+    }
+
+    if (actions[actions.length - 1] !== action) {
+      actions.push(action);
+    }
+  }
+
+  if (actions.length === 0) {
+    return "—";
+  }
+
+  if (actions.length <= 8) {
+    return actions.join(" -> ");
+  }
+
+  return `${actions.slice(0, 7).join(" -> ")} -> +${actions.length - 7} more`;
+}
+
+function buildWorkOrderSpans(
+  rows: ReportRow[],
+  woDetailsByWoIdStr: Map<string, WoDetails>,
+): Map<string, WorkOrderSpan> {
+  const regularRows = rows.filter(
+    (row) => !row.isPauseBanner && !row.isWoHeader && !row.isWoSummary,
+  );
+  const spans = new Map<string, WorkOrderSpan>();
+
+  for (let index = 0; index < regularRows.length; index += 1) {
+    const startRow = regularRows[index];
+    if (!startRow) {
+      continue;
+    }
+
+    if (getRowDisplayAction(startRow) !== "WO_START") {
+      continue;
+    }
+
+    const startWoId = getRowWoId(startRow);
+    let stopIndex = -1;
+    let nextStartIndex = -1;
+
+    for (
+      let candidateIndex = index + 1;
+      candidateIndex < regularRows.length;
+      candidateIndex += 1
+    ) {
+      const candidate = regularRows[candidateIndex];
+      if (!candidate) {
+        continue;
+      }
+
+      const candidateAction = getRowDisplayAction(candidate);
+      const candidateWoId = getRowWoId(candidate);
+
+      if (
+        candidateAction === "WO_START" &&
+        nextStartIndex === -1 &&
+        (!startWoId || (candidateWoId && candidateWoId !== startWoId))
+      ) {
+        nextStartIndex = candidateIndex;
+        break;
+      }
+
+      if (
+        candidateAction === "WO_STOP" &&
+        (!startWoId || !candidateWoId || candidateWoId === startWoId)
+      ) {
+        stopIndex = candidateIndex;
+        break;
+      }
+    }
+
+    const endIndex =
+      stopIndex >= 0
+        ? stopIndex
+        : nextStartIndex >= 0
+          ? nextStartIndex - 1
+          : regularRows.length - 1;
+    const spanRows = regularRows.slice(index, endIndex + 1);
+    if (spanRows.length === 0) {
+      continue;
+    }
+
+    const stopRow = stopIndex >= 0 ? regularRows[stopIndex] : undefined;
+    const details = startWoId ? woDetailsByWoIdStr.get(startWoId) : undefined;
+    const spanEndRow = stopRow ?? spanRows[spanRows.length - 1];
+    if (!spanEndRow) {
+      continue;
+    }
+
+    const computedCuttingSec = spanRows.reduce((total, row) => {
+      if (
+        row.isComputed ||
+        !row.jobBlockLabel ||
+        typeof row.durationSec !== "number"
+      ) {
+        return total;
+      }
+
+      return total + row.durationSec;
+    }, 0);
+    const computedLoadingSec = spanRows.reduce((total, row) => {
+      if (!row.isComputed || typeof row.durationSec !== "number") {
+        return total;
+      }
+
+      return row.label?.toLowerCase().includes("load")
+        ? total + row.durationSec
+        : total;
+    }, 0);
+    const computedPauseSec = spanRows.reduce((total, row) => {
+      if (
+        getRowDisplayAction(row) !== "WO_PAUSE" ||
+        typeof row.durationSec !== "number"
+      ) {
+        return total;
+      }
+
+      return total + row.durationSec;
+    }, 0);
+    const computedIdealSec = spanRows.reduce((total, row) => {
+      if (!row.isComputed || typeof row.durationSec !== "number") {
+        return total;
+      }
+
+      return row.label?.toLowerCase().includes("ideal")
+        ? total + row.durationSec
+        : total;
+    }, 0);
+    const totalDurationSec =
+      details?.duration ??
+      Math.max(
+        0,
+        Math.round(
+          (spanEndRow.logTime.getTime() - startRow.logTime.getTime()) / 1000,
+        ),
+      );
+    const cuttingSec =
+      computedCuttingSec > 0
+        ? computedCuttingSec
+        : totalDurationSec -
+          (details?.load_time ?? 0) -
+          (details?.idle_time ?? 0);
+    const loadingSec =
+      computedLoadingSec > 0
+        ? computedLoadingSec
+        : (details?.load_time ?? undefined);
+    const pauseSec =
+      computedPauseSec > 0
+        ? computedPauseSec
+        : (details?.idle_time ?? undefined);
+    const idealSec =
+      computedIdealSec > 0
+        ? computedIdealSec
+        : (details?.target_duration ?? details?.pcl ?? undefined);
+
+    spans.set(startRow.rowId, {
+      startRowId: startRow.rowId,
+      woId: startWoId,
+      rows: spanRows,
+      startRow,
+      stopRow,
+      machineLabel: resolveRowMachineLabel(startRow, woDetailsByWoIdStr),
+      operatorName:
+        startRow.operatorName ?? details?.start_name ?? stopRow?.operatorName,
+      jobType:
+        startRow.jobType && startRow.jobType !== "Unknown"
+          ? String(startRow.jobType)
+          : stopRow?.jobType
+            ? String(stopRow.jobType)
+            : undefined,
+      partNo:
+        startRow.startRowData?.partNo ??
+        (typeof startRow.originalLog?.part_no === "string"
+          ? startRow.originalLog.part_no
+          : undefined) ??
+        details?.part_no,
+      setting:
+        (typeof startRow.originalLog?.setting === "string"
+          ? startRow.originalLog.setting
+          : undefined) ?? details?.setting,
+      startComment:
+        startRow.startRowData?.comment ||
+        (typeof startRow.originalLog?.start_comment === "string"
+          ? startRow.originalLog.start_comment
+          : undefined) ||
+        details?.start_comment,
+      stopComment:
+        stopRow?.stopRowData?.reason ||
+        (typeof stopRow?.originalLog?.stop_comment === "string"
+          ? stopRow.originalLog.stop_comment
+          : undefined) ||
+        details?.stop_comment,
+      allottedQty:
+        startRow.startRowData?.allotted ??
+        startRow.woSpecs?.allotted ??
+        details?.alloted_qty,
+      okQty: stopRow?.stopRowData?.ok ?? details?.ok_qty,
+      rejectQty: stopRow?.stopRowData?.reject ?? details?.reject_qty,
+      logCount: spanRows.filter((row) => row.logId != null || row.originalLog)
+        .length,
+      startTime: startRow.logTime,
+      endTime: spanEndRow.logTime,
+      totalDurationText: formatDurationValue(totalDurationSec),
+      cuttingText: formatDurationValue(cuttingSec > 0 ? cuttingSec : undefined),
+      loadingText: formatDurationValue(loadingSec),
+      pauseText: formatDurationValue(pauseSec),
+      idealText:
+        typeof idealSec === "number" && Number.isFinite(idealSec)
+          ? formatDurationValue(idealSec)
+          : (startRow.woSpecs?.pclText ?? "—"),
+      timelineText: buildTimelineText(spanRows),
+    });
+  }
+
+  return spans;
 }
 
 function MachineCell({ label }: { label: string }) {
@@ -99,12 +377,172 @@ function MachineCell({ label }: { label: string }) {
   );
 }
 
+function WorkOrderSummaryPanel({ span }: { span: WorkOrderSpan }) {
+  return (
+    <div className="mx-4 mb-4 rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(248,250,252,0.98)_100%)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_12px_28px_-18px_rgba(15,23,42,0.35)]">
+      <div className="flex flex-wrap items-center gap-2.5">
+        <ActionBadge action="WO_START" />
+        {span.machineLabel !== "—" ? (
+          <MachineCell label={span.machineLabel} />
+        ) : null}
+        <span className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-indigo-700">
+          WO #{fmt(span.woId)}
+        </span>
+        <JobTypeBadge jobType={span.jobType} />
+        {span.operatorName ? <OperatorCell name={span.operatorName} /> : null}
+        <span
+          className={cn(
+            "inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em]",
+            span.stopRow
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-amber-200 bg-amber-50 text-amber-700",
+          )}
+        >
+          {span.stopRow ? "Closed" : "Open"}
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        {[
+          {
+            label: "Total Duration",
+            value: span.totalDurationText,
+            tone: "text-slate-800",
+          },
+          {
+            label: "Cutting Time",
+            value: span.cuttingText,
+            tone: "text-emerald-700",
+          },
+          {
+            label: "Loading Time",
+            value: span.loadingText,
+            tone: "text-blue-700",
+          },
+          {
+            label: "Pause Time",
+            value: span.pauseText,
+            tone: "text-amber-700",
+          },
+          {
+            label: "Ideal Time",
+            value: span.idealText,
+            tone: "text-violet-700",
+          },
+        ].map((metric) => (
+          <div
+            key={metric.label}
+            className="rounded-2xl border border-slate-200 bg-white px-3 py-3 shadow-sm"
+          >
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              {metric.label}
+            </div>
+            <div
+              className={cn("mt-1 font-mono text-sm font-bold", metric.tone)}
+            >
+              {metric.value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <Separator className="my-4 bg-slate-200" />
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.9fr)]">
+        <div className="flex flex-col gap-4">
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              Work Order Window
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-700">
+              <span className="font-mono">{fmtTime(span.startTime)}</span>
+              <ChevronRight className="h-3.5 w-3.5 text-slate-300" />
+              <span className="font-mono">{fmtTime(span.endTime)}</span>
+            </div>
+            <div className="mt-2 text-xs text-slate-500">
+              {span.logCount} logs included from WO_START to{" "}
+              {span.stopRow ? "WO_STOP" : "the latest row"}.
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              Timeline
+            </div>
+            <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-[11px] text-slate-700">
+              {span.timelineText}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              Summary / Notes
+            </div>
+            <div className="mt-2 flex flex-col gap-2 text-xs text-slate-600">
+              <div>
+                <span className="font-bold uppercase tracking-[0.12em] text-slate-400">
+                  Start
+                </span>
+                <div className="mt-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  {fmt(span.startComment)}
+                </div>
+              </div>
+              <div>
+                <span className="font-bold uppercase tracking-[0.12em] text-slate-400">
+                  Stop
+                </span>
+                <div className="mt-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  {fmt(span.stopComment)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+            WO Context
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {[
+              { label: "WO ID", value: fmt(span.woId) },
+              { label: "Part No", value: fmt(span.partNo) },
+              { label: "Setting", value: fmt(span.setting) },
+              { label: "Allotted Qty", value: fmt(span.allottedQty) },
+              { label: "OK Qty", value: fmt(span.okQty) },
+              { label: "Reject Qty", value: fmt(span.rejectQty) },
+            ].map((item) => (
+              <div
+                key={item.label}
+                className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3"
+              >
+                <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                  {item.label}
+                </div>
+                <div className="mt-1 text-sm font-semibold text-slate-700">
+                  {item.value}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Action Badge ───────────────────────────────────────────────────────── */
 
 type ActionCfg = { icon: React.ReactNode; label: string; cls: string };
 
 function getActionCfg(action?: string): ActionCfg {
   switch (action) {
+    case "M30_CHANGED":
+      return {
+        icon: <CheckCircle2 className="h-3 w-3" />,
+        label: "M30 Changed",
+        cls: "bg-emerald-600 text-white border-emerald-700 ring-emerald-400/30 shadow-sm shadow-emerald-200",
+      };
     case "WO_START":
       return {
         icon: <Play className="h-3 w-3" />,
@@ -172,6 +610,10 @@ function getActionCfg(action?: string): ActionCfg {
         cls: "bg-slate-600 text-white border-slate-700 ring-slate-400/30",
       };
   }
+}
+
+function getRowDisplayAction(row: ReportRow): string | undefined {
+  return row.displayAction ?? row.action ?? undefined;
 }
 
 function ActionBadge({ action }: { action?: string | undefined }) {
@@ -313,7 +755,7 @@ function DurationChip({
       className={cn(
         "inline-flex items-center gap-1.5 px-3 py-[4px] rounded-full font-mono text-[11px] font-semibold border",
         cls,
-        className
+        className,
       )}
     >
       <Clock className="h-2.5 w-2.5 opacity-60 flex-shrink-0" />
@@ -376,7 +818,7 @@ function OperatorCell({ name }: { name?: string | undefined }) {
     .join("");
   const colorCls =
     AV_COLORS[
-    name.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % AV_COLORS.length
+      name.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % AV_COLORS.length
     ];
   return (
     <div className="flex items-center gap-1.5 min-w-0">
@@ -773,47 +1215,52 @@ function getRowVisualState(
     (idx === visibleRows.length - 1 ||
       visibleRows[idx + 1]?.jobBlockLabel !== row.jobBlockLabel);
   const isInBlock = !!row.jobBlockLabel;
+  const action = getRowDisplayAction(row);
 
   const accentBorder =
-    row.action === "WO_START"
+    action === "WO_START"
       ? "border-l-[3px] border-l-indigo-400"
-      : row.action === "WO_STOP"
+      : action === "WO_STOP"
         ? "border-l-[3px] border-l-rose-400"
-        : row.action === "WO_PAUSE"
+        : action === "WO_PAUSE"
           ? "border-l-[3px] border-l-amber-400"
-          : row.action === "WO_RESUME"
+          : action === "WO_RESUME"
             ? "border-l-[3px] border-l-blue-400"
-            : row.action === "SPINDLE_ON"
+            : action === "SPINDLE_ON"
               ? "border-l-[3px] border-l-teal-400"
-              : row.action === "SPINDLE_OFF"
+              : action === "SPINDLE_OFF"
                 ? "border-l-[3px] border-l-slate-400"
-                : row.action === "MTR_ON"
-                  ? "border-l-[3px] border-l-orange-400"
-                  : row.action === "MTR_OFF"
-                    ? "border-l-[3px] border-l-orange-600"
-                    : row.action === "KEY_ON" || row.action === "KEY_OFF"
-                      ? "border-l-[3px] border-l-cyan-400"
-                      : row.isComputed
-                        ? "border-l-[3px] border-l-slate-200"
-                        : "";
+                : action === "M30_CHANGED"
+                  ? "border-l-[3px] border-l-emerald-500"
+                  : action === "MTR_ON"
+                    ? "border-l-[3px] border-l-orange-400"
+                    : action === "MTR_OFF"
+                      ? "border-l-[3px] border-l-orange-600"
+                      : action === "KEY_ON" || action === "KEY_OFF"
+                        ? "border-l-[3px] border-l-cyan-400"
+                        : row.isComputed
+                          ? "border-l-[3px] border-l-slate-200"
+                          : "";
 
   const rowBg = isInBlock
     ? undefined
-    : row.action === "WO_START"
+    : action === "WO_START"
       ? "bg-indigo-50/60"
-      : row.action === "WO_STOP"
+      : action === "WO_STOP"
         ? "bg-rose-50/40"
-        : row.action === "WO_PAUSE" || row.action === "WO_RESUME"
+        : action === "WO_PAUSE" || action === "WO_RESUME"
           ? "bg-amber-50/50"
-          : row.action === "MTR_ON" || row.action === "MTR_OFF"
-            ? "bg-orange-50/40"
-            : row.action === "KEY_ON" || row.action === "KEY_OFF"
-              ? "bg-cyan-50/40"
-              : row.isComputed
-                ? "bg-slate-50/80"
-                : idx % 2 === 0
-                  ? "bg-white"
-                  : "bg-slate-50/40";
+          : action === "M30_CHANGED"
+            ? "bg-emerald-50/40"
+            : action === "MTR_ON" || action === "MTR_OFF"
+              ? "bg-orange-50/40"
+              : action === "KEY_ON" || action === "KEY_OFF"
+                ? "bg-cyan-50/40"
+                : row.isComputed
+                  ? "bg-slate-50/80"
+                  : idx % 2 === 0
+                    ? "bg-white"
+                    : "bg-slate-50/40";
 
   return {
     isFirstInBlock,
@@ -894,8 +1341,13 @@ function CompareLaneRows({
     <div className="space-y-2">
       {rows.map((row) => {
         const rowIndex = rowIndexMap.get(row.rowId) ?? 0;
-        const { isFirstInBlock, isLastInBlock, isInBlock, accentBorder, rowBg } =
-          getRowVisualState(row, rowIndex, laneVisibleRows);
+        const {
+          isFirstInBlock,
+          isLastInBlock,
+          isInBlock,
+          accentBorder,
+          rowBg,
+        } = getRowVisualState(row, rowIndex, laneVisibleRows);
 
         return (
           <div
@@ -906,7 +1358,8 @@ function CompareLaneRows({
               accentBorder,
               isFirstInBlock && "border-t-2 border-t-emerald-400",
               isLastInBlock && "border-b-2 border-b-emerald-400",
-              isInBlock && "border-l-[3px] border-l-emerald-300 row-in-block-bg",
+              isInBlock &&
+                "border-l-[3px] border-l-emerald-300 row-in-block-bg",
               row.isComputed && "opacity-90",
             )}
           >
@@ -937,7 +1390,7 @@ function CompareLaneRows({
               </div>
 
               <div className="pt-0.5">
-                <ActionBadge action={row.action ?? undefined} />
+                <ActionBadge action={getRowDisplayAction(row)} />
               </div>
 
               <div className="pt-0.5">
@@ -1055,10 +1508,7 @@ export function ReportCompareMatrix({
             <div className="h-[3px] bg-gradient-to-r from-indigo-500 via-violet-500 to-indigo-400" />
             <div className="overflow-x-auto thin-scrollbar">
               <div className="min-w-max">
-                <div
-                  className="grid"
-                  style={{ gridTemplateColumns }}
-                >
+                <div className="grid" style={{ gridTemplateColumns }}>
                   <div className="bg-[linear-gradient(180deg,#1e293b_0%,#0f172a_100%)] px-3 py-3 text-center text-slate-300 border-r border-slate-700/80">
                     <p className="text-[10px] font-bold uppercase tracking-[0.24em]">
                       Time
@@ -1136,11 +1586,18 @@ export function ReportTable({
   isFiltered,
   woDetailsMap,
 }: ReportTableProps) {
+  const [openWoStartRowId, setOpenWoStartRowId] = React.useState<string | null>(
+    null,
+  );
   const woDetailsByWoIdStr = React.useMemo(
     () => buildWoDetailsByWoIdStr(woDetailsMap),
     [woDetailsMap],
   );
   const visibleRows = rows.filter((row) => !row.isPauseBanner);
+  const workOrderSpansByStartRowId = React.useMemo(
+    () => buildWorkOrderSpans(visibleRows, woDetailsByWoIdStr),
+    [visibleRows, woDetailsByWoIdStr],
+  );
 
   if (visibleRows.length === 0) {
     if (isFiltered)
@@ -1176,196 +1633,213 @@ export function ReportTable({
                 return <WoSummaryRow key={row.rowId} row={row} />;
 
               /* ── Regular Data Row ── */
-              const isFirstInBlock =
-                !!row.jobBlockLabel &&
-                (idx === 0 ||
-                  visibleRows[idx - 1]?.jobBlockLabel !== row.jobBlockLabel);
-              const isLastInBlock =
-                !!row.jobBlockLabel &&
-                (idx === visibleRows.length - 1 ||
-                  visibleRows[idx + 1]?.jobBlockLabel !== row.jobBlockLabel);
-              const isInBlock = !!row.jobBlockLabel;
+              const displayAction = getRowDisplayAction(row);
+              const {
+                isFirstInBlock,
+                isLastInBlock,
+                isInBlock,
+                accentBorder,
+                rowBg,
+              } = getRowVisualState(row, idx, visibleRows);
+              const workOrderSpan =
+                displayAction === "WO_START"
+                  ? workOrderSpansByStartRowId.get(row.rowId)
+                  : undefined;
+              const isWorkOrderExpandable = !!workOrderSpan;
+              const isWorkOrderOpen = openWoStartRowId === row.rowId;
+              const toggleWorkOrderRow = () => {
+                if (!isWorkOrderExpandable) {
+                  return;
+                }
 
-              /* ── Per-action left accent colour ── */
-              const accentBorder =
-                row.action === "WO_START"
-                  ? "border-l-[3px] border-l-indigo-400"
-                  : row.action === "WO_STOP"
-                    ? "border-l-[3px] border-l-rose-400"
-                    : row.action === "WO_PAUSE"
-                      ? "border-l-[3px] border-l-amber-400"
-                      : row.action === "WO_RESUME"
-                        ? "border-l-[3px] border-l-blue-400"
-                        : row.action === "SPINDLE_ON"
-                          ? "border-l-[3px] border-l-teal-400"
-                          : row.action === "SPINDLE_OFF"
-                            ? "border-l-[3px] border-l-slate-400"
-                            : row.action === "MTR_ON"
-                              ? "border-l-[3px] border-l-orange-400"
-                              : row.action === "MTR_OFF"
-                                ? "border-l-[3px] border-l-orange-600"
-                            : row.action === "KEY_ON" ||
-                              row.action === "KEY_OFF"
-                              ? "border-l-[3px] border-l-cyan-400"
-                              : row.isComputed
-                                ? "border-l-[3px] border-l-slate-200"
-                                : "";
-
-              /* ── Row background ── */
-              const rowBg = isInBlock
-                ? undefined
-                : row.action === "WO_START"
-                  ? "bg-indigo-50/60"
-                  : row.action === "WO_STOP"
-                    ? "bg-rose-50/40"
-                    : row.action === "WO_PAUSE" || row.action === "WO_RESUME"
-                      ? "bg-amber-50/50"
-                      : row.action === "MTR_ON" || row.action === "MTR_OFF"
-                        ? "bg-orange-50/40"
-                      : row.action === "KEY_ON" || row.action === "KEY_OFF"
-                        ? "bg-cyan-50/40"
-                        : row.isComputed
-                          ? "bg-slate-50/80"
-                          : idx % 2 === 0
-                            ? "bg-white"
-                            : "bg-slate-50/40";
+                setOpenWoStartRowId((current) =>
+                  current === row.rowId ? null : row.rowId,
+                );
+              };
 
               return (
-                <tr
-                  key={row.rowId}
-                  className={cn(
-                    "border-b border-slate-100 last:border-0 transition-all duration-100",
-                    !isInBlock && rowBg,
-                    !isInBlock && accentBorder,
-                    !isInBlock &&
-                    "hover:bg-indigo-50/30 hover:border-l-indigo-400 hover:border-l-[3px]",
-                    isFirstInBlock && "border-t-2 border-t-emerald-400",
-                    isLastInBlock && "border-b-2 border-b-emerald-400",
-                    isInBlock && "border-l-[3px] border-l-emerald-300",
-                    row.isComputed && "opacity-90",
-                    isInBlock && "row-in-block-bg",
-                  )}
-                >
-                  {/* S.No */}
-                  <td className="px-3 py-2.5 text-center">
-                    {row.sNo != null ? (
-                      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-slate-100 text-[10px] font-bold text-slate-500 tabular-nums">
-                        {row.sNo}
-                      </span>
-                    ) : (
-                      <span className="text-slate-200 text-xs select-none">
-                        ·
-                      </span>
+                <React.Fragment key={row.rowId}>
+                  <tr
+                    className={cn(
+                      "border-b border-slate-100 last:border-0 transition-all duration-100",
+                      !isInBlock && rowBg,
+                      !isInBlock && accentBorder,
+                      !isInBlock &&
+                        "hover:bg-indigo-50/30 hover:border-l-indigo-400 hover:border-l-[3px]",
+                      isFirstInBlock && "border-t-2 border-t-emerald-400",
+                      isLastInBlock && "border-b-2 border-b-emerald-400",
+                      isInBlock && "border-l-[3px] border-l-emerald-300",
+                      row.isComputed && "opacity-90",
+                      isInBlock && "row-in-block-bg",
+                      isWorkOrderExpandable && "cursor-pointer",
                     )}
-                  </td>
-
-                  {/* Log ID */}
-                  <td className="px-3 py-2.5">
-                    <span className="font-mono text-[11px] text-slate-600 tabular-nums">
-                      {row.logId ?? <span className="text-slate-300">—</span>}
-                    </span>
-                  </td>
-
-                  {/* Log Time */}
-                  <td className="px-3 py-2.5 whitespace-nowrap">
-                    <span className="font-mono text-[11px] text-slate-700 font-medium tabular-nums">
-                      {fmtTime(row.logTime)}
-                    </span>
-                  </td>
-
-                  {/* Machine */}
-                  <td className="px-3 py-2.5 align-top">
-                    <MachineCell
-                      label={resolveRowMachineLabel(row, woDetailsByWoIdStr)}
-                    />
-                  </td>
-
-                  {/* Action */}
-                  <td className="px-3 py-2.5">
-                    <ActionBadge action={row.action ?? undefined} />
-                  </td>
-
-                  {/* Duration */}
-                  <td className="px-3 py-2.5 align-top">
-                    {row.startRowData ? (
-                      <div className="flex flex-col gap-0.5">
-                        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
-                          Part No
-                        </span>
-                        <span className="font-mono text-[11px] font-bold text-slate-700">
-                          {fmt(row.startRowData.partNo)}
-                        </span>
+                    onClick={
+                      isWorkOrderExpandable ? toggleWorkOrderRow : undefined
+                    }
+                  >
+                    {/* S.No */}
+                    <td className="px-3 py-2.5 text-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        {isWorkOrderExpandable ? (
+                          <button
+                            type="button"
+                            aria-expanded={isWorkOrderOpen}
+                            aria-label={`${
+                              isWorkOrderOpen ? "Collapse" : "Expand"
+                            } work order details`}
+                            className="inline-flex size-5 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:border-indigo-300 hover:text-indigo-600"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleWorkOrderRow();
+                            }}
+                          >
+                            {isWorkOrderOpen ? (
+                              <ChevronDown className="h-3 w-3" />
+                            ) : (
+                              <ChevronRight className="h-3 w-3" />
+                            )}
+                          </button>
+                        ) : null}
+                        {row.sNo != null ? (
+                          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-500 tabular-nums">
+                            {row.sNo}
+                          </span>
+                        ) : (
+                          <span className="text-slate-200 text-xs select-none">
+                            ·
+                          </span>
+                        )}
                       </div>
-                    ) : row.stopRowData ? (
-                      <div className="flex flex-col gap-0.5">
-                        <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-600">
-                          OK Qty
-                        </span>
-                        <span className="font-mono text-[11px] font-bold text-emerald-700">
-                          {fmt(row.stopRowData.ok)}
-                        </span>
-                      </div>
-                    ) : row.durationText ? (
-                      <DurationChip
-                        durationText={row.durationText ?? undefined}
-                        varianceColor={row.varianceColor ?? undefined}
+                    </td>
+
+                    {/* Log ID */}
+                    <td className="px-3 py-2.5">
+                      <span className="font-mono text-[11px] text-slate-600 tabular-nums">
+                        {row.logId ?? <span className="text-slate-300">—</span>}
+                      </span>
+                    </td>
+
+                    {/* Log Time */}
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      <span className="font-mono text-[11px] text-slate-700 font-medium tabular-nums">
+                        {fmtTime(row.logTime)}
+                      </span>
+                    </td>
+
+                    {/* Machine */}
+                    <td className="px-3 py-2.5 align-top">
+                      <MachineCell
+                        label={resolveRowMachineLabel(row, woDetailsByWoIdStr)}
                       />
-                    ) : (
-                      <span className="text-slate-200 text-xs select-none">
-                        —
-                      </span>
-                    )}
-                  </td>
+                    </td>
 
-                  {/* Label */}
-                  <td className="px-3 py-2.5 text-center align-top">
-                    {row.startRowData ? (
-                      <div className="flex flex-col gap-0.5 items-center">
-                        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
-                          Allotted
+                    {/* Action */}
+                    <td className="px-3 py-2.5">
+                      <ActionBadge action={displayAction} />
+                    </td>
+
+                    {/* Duration */}
+                    <td className="px-3 py-2.5 align-top">
+                      {row.startRowData ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                            Part No
+                          </span>
+                          <span className="font-mono text-[11px] font-bold text-slate-700">
+                            {fmt(row.startRowData.partNo)}
+                          </span>
+                        </div>
+                      ) : row.stopRowData ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-600">
+                            OK Qty
+                          </span>
+                          <span className="font-mono text-[11px] font-bold text-emerald-700">
+                            {fmt(row.stopRowData.ok)}
+                          </span>
+                        </div>
+                      ) : row.durationText ? (
+                        <DurationChip
+                          durationText={row.durationText ?? undefined}
+                          varianceColor={row.varianceColor ?? undefined}
+                        />
+                      ) : (
+                        <span className="text-slate-200 text-xs select-none">
+                          —
                         </span>
-                        <span className="text-[11px] font-bold text-blue-700">
-                          {row.startRowData.allotted}
-                        </span>
-                      </div>
-                    ) : row.stopRowData ? (
-                      <div className="flex flex-col gap-0.5 items-center">
-                        <span className="text-[9px] font-bold uppercase tracking-widest text-rose-500">
-                          Rej Qty
-                        </span>
-                        <span className="text-[11px] font-bold text-rose-700">
-                          {fmt(row.stopRowData.reject)}
-                        </span>
-                      </div>
-                    ) : (
-                      <LabelBadge
-                        label={row.label ?? undefined}
-                        jobBlockLabel={row.jobBlockLabel ?? undefined}
-                        isFirstInBlock={isFirstInBlock ?? undefined}
-                      />
-                    )}
-                  </td>
+                      )}
+                    </td>
 
-                  {/* Summary / Notes */}
-                  <td className="px-3 py-2.5 align-top">
-                    <SummaryCell row={row} />
-                  </td>
+                    {/* Label */}
+                    <td className="px-3 py-2.5 text-center align-top">
+                      {row.startRowData ? (
+                        <div className="flex flex-col gap-0.5 items-center">
+                          <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                            Allotted
+                          </span>
+                          <span className="text-[11px] font-bold text-blue-700">
+                            {row.startRowData.allotted}
+                          </span>
+                        </div>
+                      ) : row.stopRowData ? (
+                        <div className="flex flex-col gap-0.5 items-center">
+                          <span className="text-[9px] font-bold uppercase tracking-widest text-rose-500">
+                            Rej Qty
+                          </span>
+                          <span className="text-[11px] font-bold text-rose-700">
+                            {fmt(row.stopRowData.reject)}
+                          </span>
+                        </div>
+                      ) : (
+                        <LabelBadge
+                          label={row.label ?? undefined}
+                          jobBlockLabel={row.jobBlockLabel ?? undefined}
+                          isFirstInBlock={isFirstInBlock ?? undefined}
+                        />
+                      )}
+                    </td>
 
-                  {/* WO Specs */}
-                  <td className="px-3 py-2.5 align-top">
-                    <WoSpecsCell woSpecs={row.woSpecs ?? undefined} />
-                  </td>
+                    {/* Summary / Notes */}
+                    <td className="px-3 py-2.5 align-top">
+                      <SummaryCell row={row} />
+                    </td>
 
-                  {/* Job Type */}
-                  <td className="px-3 py-2.5 align-top">
-                    <JobTypeBadge jobType={String(row.jobType ?? "")} />
-                  </td>
+                    {/* WO Specs */}
+                    <td className="px-3 py-2.5 align-top">
+                      <WoSpecsCell woSpecs={row.woSpecs ?? undefined} />
+                    </td>
 
-                  {/* Operator */}
-                  <td className="px-3 py-2.5 align-top">
-                    <OperatorCell name={row.operatorName ?? undefined} />
-                  </td>
-                </tr>
+                    {/* Job Type */}
+                    <td className="px-3 py-2.5 align-top">
+                      <JobTypeBadge jobType={String(row.jobType ?? "")} />
+                    </td>
+
+                    {/* Operator */}
+                    <td className="px-3 py-2.5 align-top">
+                      <OperatorCell name={row.operatorName ?? undefined} />
+                    </td>
+                  </tr>
+
+                  {isWorkOrderExpandable && isWorkOrderOpen && workOrderSpan ? (
+                    <tr className="bg-slate-50/60">
+                      <td colSpan={11} className="p-0">
+                        <Collapsible
+                          open={isWorkOrderOpen}
+                          onOpenChange={(open) =>
+                            setOpenWoStartRowId(open ? row.rowId : null)
+                          }
+                        >
+                          <CollapsibleContent
+                            forceMount
+                            className="overflow-hidden"
+                          >
+                            <WorkOrderSummaryPanel span={workOrderSpan} />
+                          </CollapsibleContent>
+                        </Collapsible>
+                      </td>
+                    </tr>
+                  ) : null}
+                </React.Fragment>
               );
             })}
           </tbody>

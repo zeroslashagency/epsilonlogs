@@ -18,11 +18,18 @@ export function normalizeLogs(logs: DeviceLogEntry[]): DeviceLogEntry[] {
             continue;
         }
 
+        const rawWoId = (log as { wo_id?: unknown }).wo_id;
+        const canonicalWoId = typeof rawWoId === "number" ? rawWoId : Number(rawWoId);
+        const rawDeviceId = (log as { device_id?: unknown }).device_id;
+        const canonicalDeviceId = typeof rawDeviceId === "number" ? rawDeviceId : Number(rawDeviceId);
+
         if (!seenIds.has(canonicalId)) {
             seenIds.add(canonicalId);
             uniqueLogs.push({
                 ...log,
                 log_id: canonicalId,
+                wo_id: Number.isFinite(canonicalWoId) ? canonicalWoId : 0,
+                device_id: Number.isFinite(canonicalDeviceId) ? canonicalDeviceId : 0,
             });
         }
     }
@@ -31,7 +38,10 @@ export function normalizeLogs(logs: DeviceLogEntry[]): DeviceLogEntry[] {
     return uniqueLogs.sort((a, b) => {
         const tA = new Date(a.log_time).getTime();
         const tB = new Date(b.log_time).getTime();
-        return tA - tB;
+        if (tA !== tB) {
+            return tA - tB;
+        }
+        return a.log_id - b.log_id;
     });
 }
 
@@ -41,8 +51,10 @@ export function normalizeLogs(logs: DeviceLogEntry[]): DeviceLogEntry[] {
 export function extractWoIds(logs: DeviceLogEntry[]): number[] {
     const ids = new Set<number>();
     for (const log of logs) {
-        if (log.wo_id) {
-            ids.add(log.wo_id);
+        const rawWoId = (log as { wo_id?: unknown }).wo_id;
+        const canonicalWoId = typeof rawWoId === "number" ? rawWoId : Number(rawWoId);
+        if (Number.isFinite(canonicalWoId) && canonicalWoId > 0) {
+            ids.add(canonicalWoId);
         }
     }
     return Array.from(ids);

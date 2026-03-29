@@ -22,6 +22,7 @@ export function injectComputedRows(
 ): ReportRow[] {
     const rows: ReportRow[] = [];
     const operator = woDetails?.start_name || "";
+    const pairedSpindleLogIds = new Set<number>();
 
     const woStartLog = segment.logs.find((l: DeviceLogEntry) => l.action === "WO_START");
     const woStopLog = segment.logs.find((l: DeviceLogEntry) => l.action === "WO_STOP");
@@ -175,6 +176,8 @@ export function injectComputedRows(
             for (let cIdx = 0; cIdx < block.cycles.length; cIdx++) {
                 const cycle = block.cycles[cIdx]!;
                 const isFinal = cIdx === block.cycles.length - 1;
+                pairedSpindleLogIds.add(cycle.onLog.log_id);
+                pairedSpindleLogIds.add(cycle.offLog.log_id);
 
                 // SPINDLE_ON — variance on final cycle
                 rows.push({
@@ -195,7 +198,7 @@ export function injectComputedRows(
                 });
 
                 // SPINDLE_OFF — total on final cycle
-                rows.push({
+                const offRow: ReportRow = {
                     rowId: `log-${cycle.offLog.log_id}`,
                     logId: cycle.offLog.log_id,
                     logTime: new Date(cycle.offLog.log_time),
@@ -211,7 +214,12 @@ export function injectComputedRows(
                     summary: isFinal && block.pcl ? formatDuration(block.totalSec) : undefined,
                     operatorName: operator,
                     woSpecs,
-                });
+                };
+                if (cycle.completionSource === "M30") {
+                    offRow.displayAction = "M30_CHANGED";
+                    offRow.completionSource = "M30";
+                }
+                rows.push(offRow);
 
                 // Loading/Unloading gap
                 const nextCycle = !isFinal
@@ -238,7 +246,11 @@ export function injectComputedRows(
                     // The issue was visual discontinuity. If we give it the CURRENT block's label, it extends the green line.
                     // But only if next cycle is ALSO the same label?
                     // Actually, if we give it the label, it will be wrapped. That's what we want if it's "part of the job".
-                    const gapLabel = (!isFinal) ? block.label : undefined;
+                    const gapLabel = !isFinal
+                        ? block.label
+                        : bIdx < jobBlocks.length - 1
+                            ? jobBlocks[bIdx + 1]!.label
+                            : undefined;
 
                     if (hasStop) {
                         // skip
@@ -266,6 +278,30 @@ export function injectComputedRows(
                 }
             }
         }
+    }
+
+    const orphanSpindleLogs = segment.logs.filter((log) =>
+        (log.action === "SPINDLE_ON" || log.action === "SPINDLE_OFF") &&
+        !pairedSpindleLogIds.has(log.log_id)
+    );
+
+    for (const log of orphanSpindleLogs) {
+        const orphanRow: ReportRow = {
+            rowId: `log-${log.log_id}`,
+            logId: log.log_id,
+            logTime: new Date(log.log_time),
+            action: log.action,
+            jobType: segment.jobType,
+            originalLog: log,
+            timestamp: new Date(log.log_time).getTime(),
+            operatorName: operator,
+            woSpecs,
+        };
+        if (log.completionSource === "M30") {
+            orphanRow.displayAction = "M30_CHANGED";
+            orphanRow.completionSource = "M30";
+        }
+        rows.push(orphanRow);
     }
 
     // 5. Pause/Resume events + Pause Banners
@@ -410,7 +446,17 @@ export function injectComputedRows(
         });
     }
 
-    return rows.sort((a, b) => a.timestamp - b.timestamp);
+    return rows.sort((a, b) => {
+        if (a.timestamp !== b.timestamp) {
+            return a.timestamp - b.timestamp;
+        }
+        const aLogId = typeof a.logId === "number" ? a.logId : Number.MAX_SAFE_INTEGER;
+        const bLogId = typeof b.logId === "number" ? b.logId : Number.MAX_SAFE_INTEGER;
+        if (aLogId !== bLogId) {
+            return aLogId - bLogId;
+        }
+        return a.rowId.localeCompare(b.rowId);
+    });
 }
 
 // --- Helpers ---

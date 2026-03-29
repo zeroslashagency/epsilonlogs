@@ -152,7 +152,9 @@ describe("ReportTable", () => {
       },
     ];
 
-    const markup = renderToStaticMarkup(<ReportCompareMatrix windows={windows} />);
+    const markup = renderToStaticMarkup(
+      <ReportCompareMatrix windows={windows} />,
+    );
 
     expect(markup).toContain("Machine");
     expect(markup).toContain("VMC 2");
@@ -211,5 +213,88 @@ describe("ReportTable", () => {
 
     expect(markup).toContain("Machine");
     expect(markup).toContain("VMC 2");
+  });
+
+  it("renders an expand control only for WO_START rows and keeps the summary closed by default", () => {
+    const rows: ReportRow[] = [
+      {
+        rowId: "wo-start-2770",
+        sNo: 1,
+        logId: 263940,
+        logTime: new Date("2026-03-29T08:10:02Z"),
+        action: "WO_START",
+        jobType: "Production",
+        timestamp: 1,
+        operatorName: "RAHUL",
+        startRowData: {
+          partNo: "PART-01",
+          allotted: 12,
+          comment: "Start comment",
+        },
+        woSpecs: {
+          woId: "2770",
+          pclText: "20 min 30 sec",
+          allotted: 12,
+        },
+      },
+      {
+        rowId: "spindle-off-2770",
+        sNo: 2,
+        logId: 263942,
+        logTime: new Date("2026-03-29T08:18:12Z"),
+        action: "SPINDLE_OFF",
+        durationText: "8m 10s",
+        durationSec: 490,
+        label: "JOB - 01",
+        jobType: "Production",
+        timestamp: 2,
+        operatorName: "RAHUL",
+        jobBlockLabel: "JOB - 01",
+        woSpecs: {
+          woId: "2770",
+          pclText: "20 min 30 sec",
+          allotted: 12,
+        },
+      },
+      {
+        rowId: "wo-stop-2770",
+        sNo: 3,
+        logId: 263944,
+        logTime: new Date("2026-03-29T08:32:04Z"),
+        action: "WO_STOP",
+        jobType: "Production",
+        timestamp: 3,
+        operatorName: "RAHUL",
+        stopRowData: {
+          ok: 12,
+          reject: 1,
+          reason: "Stop comment",
+        },
+        woSpecs: {
+          woId: "2770",
+          pclText: "20 min 30 sec",
+          allotted: 12,
+        },
+      },
+      {
+        rowId: "m30-standalone",
+        sNo: 4,
+        logId: 263950,
+        logTime: new Date("2026-03-29T08:40:00Z"),
+        action: "M30_CHANGED",
+        jobType: "Production",
+        timestamp: 4,
+        operatorName: "RAHUL",
+      },
+    ];
+
+    const markup = renderToStaticMarkup(<ReportTable rows={rows} />);
+    const expandControls =
+      markup.match(/aria-label="Expand work order details"/g) ?? [];
+
+    expect(expandControls).toHaveLength(1);
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).not.toContain("Work Order Window");
+    expect(markup).not.toContain("Collapse work order details");
   });
 });

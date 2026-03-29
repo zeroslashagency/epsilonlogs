@@ -82,25 +82,56 @@ export function segmentLogs(logs: DeviceLogEntry[]): WoSegment[] {
         segments.push(activeSegment);
     }
 
-    // Fallback: group unassigned by wo_id (handles WO_START outside date range)
+    // Fallback: preserve contiguous orphan runs instead of merging every
+    // unassigned event for a WO into one synthetic segment.
     if (unassignedLogs.length > 0) {
-        const byWo = new Map<number, DeviceLogEntry[]>();
-        for (const log of unassignedLogs) {
-            const woId = log.wo_id || 0;
-            const list = byWo.get(woId) || [];
-            list.push(log);
-            byWo.set(woId, list);
+        const sortedUnassigned = [...unassignedLogs].sort((a, b) => {
+            const tA = new Date(a.log_time).getTime();
+            const tB = new Date(b.log_time).getTime();
+            if (tA !== tB) {
+                return tA - tB;
+            }
+            return a.log_id - b.log_id;
+        });
+
+        const fallbackClusters: DeviceLogEntry[][] = [];
+        let currentCluster: DeviceLogEntry[] = [];
+
+        const flushCluster = () => {
+            if (currentCluster.length > 0) {
+                fallbackClusters.push(currentCluster);
+                currentCluster = [];
+            }
+        };
+
+        for (const log of sortedUnassigned) {
+            const prev = currentCluster[currentCluster.length - 1];
+            const startsNewCluster =
+                !prev ||
+                prev.wo_id !== log.wo_id ||
+                prev.action === "WO_STOP" ||
+                prev.action === "MTR_OFF" ||
+                log.action === "WO_START" ||
+                log.action === "MTR_ON";
+
+            if (startsNewCluster) {
+                flushCluster();
+            }
+
+            currentCluster.push(log);
         }
-        for (const [woId, woLogs] of byWo) {
-            const fallbackType = woLogs
+
+        flushCluster();
+
+        for (const cluster of fallbackClusters) {
+            const woId = cluster[0]?.wo_id || 0;
+            const fallbackType = cluster
                 .map(parsePositiveJobType)
                 .find((typeId): typeId is number => typeId != null) ?? JobType.PRODUCTION;
 
             segments.push({
                 woId,
-                logs: woLogs.sort((a, b) =>
-                    new Date(a.log_time).getTime() - new Date(b.log_time).getTime()
-                ),
+                logs: cluster,
                 spindleCycles: [],
                 pausePeriods: [],
                 jobType: mapRawJobTypeToLabel(fallbackType),

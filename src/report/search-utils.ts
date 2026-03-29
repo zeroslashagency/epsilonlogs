@@ -40,6 +40,11 @@ export function matchRow(row: ReportRow, query: string): boolean {
     // 1. Check Operator Name (Top level)
     if (matches(row.operatorName)) return true;
 
+    // 1b. Check core raw row fields
+    if (matches(String(row.logId ?? ""))) return true;
+    if (matches(row.action)) return true;
+    if (matches(row.summary)) return true;
+
     // 2. Check WO Specs (WO ID)
     if (row.woSpecs && matches(row.woSpecs.woId)) return true;
 
@@ -69,7 +74,11 @@ export function matchRow(row: ReportRow, query: string): boolean {
     // 7. Check original log for deep search (optional, but robust)
     // row.originalLog?.wo_id (number) -> string
     if (row.originalLog) {
+        if (matches(String(row.originalLog.log_id))) return true;
+        if (matches(row.originalLog.action)) return true;
         if (matches(String(row.originalLog.wo_id))) return true;
+        if (matches(row.originalLog.start_comment as string | undefined)) return true;
+        if (matches(row.originalLog.stop_comment as string | undefined)) return true;
         // Any specific fields from original log we missed?
     }
 

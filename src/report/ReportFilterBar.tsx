@@ -68,6 +68,12 @@ interface ActionColor {
 }
 
 const ACTION_COLORS: Record<string, ActionColor> = {
+  M30_CHANGED: {
+    dot: "bg-emerald-500",
+    bg: "bg-emerald-50",
+    text: "text-emerald-700",
+    border: "border-emerald-200",
+  },
   WO_START: {
     dot: "bg-emerald-500",
     bg: "bg-emerald-50",
@@ -127,6 +133,11 @@ const DEFAULT_ACTION_COLOR: ActionColor = {
 
 function getActionColor(action: string): ActionColor {
   return ACTION_COLORS[action] ?? DEFAULT_ACTION_COLOR;
+}
+
+function getRowFilterAction(row: ReportRow): string | null {
+  const action = row.displayAction ?? row.action;
+  return typeof action === "string" && action.trim().length > 0 ? action : null;
 }
 
 /* ─── Accent Config ──────────────────────────────────────────────────────── */
@@ -832,7 +843,8 @@ export function extractFilterOptions(rows: ReportRow[]): {
 
   for (const row of rows) {
     if (row.isWoHeader || row.isWoSummary || row.isPauseBanner) continue;
-    if (row.action) actions.add(row.action);
+    const action = getRowFilterAction(row);
+    if (action) actions.add(action);
     if (row.jobType && row.jobType !== "Unknown")
       jobTypes.add(String(row.jobType));
     if (row.operatorName) operators.add(row.operatorName);
@@ -845,6 +857,7 @@ export function extractFilterOptions(rows: ReportRow[]): {
 
   // Canonical action order
   const ACTION_ORDER = [
+    "M30_CHANGED",
     "WO_START",
     "WO_STOP",
     "SPINDLE_ON",
@@ -887,7 +900,8 @@ export function applyFilters(
 
     // Action filter — only apply when the row actually has an action
     if (filters.actions.length > 0) {
-      if (!row.action || !filters.actions.includes(row.action)) pass = false;
+      const action = getRowFilterAction(row);
+      if (!action || !filters.actions.includes(action)) pass = false;
     }
 
     // Job Type filter

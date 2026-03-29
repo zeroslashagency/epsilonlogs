@@ -34,12 +34,8 @@ import {
   WoDetails,
 } from "../report/report-types";
 import { formatDuration } from "../report/format-utils";
-import {
-  Expandable,
-  ExpandableContent,
-  ExpandableTrigger,
-} from "@/components/ui/expandable";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { WoChartWorkspace } from "./WoChartWorkspace";
 import { WoReportPanel } from "./WoReportPanel";
 import {
   compareDashboardMachineOrder,
@@ -60,8 +56,8 @@ const OVERVIEW_CACHE_TTL_MS = 45000;
 const WO_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
 const LIVE_WINDOW_MS = 15 * 60 * 1000;
 const TOP_WO_LIMIT = 12;
+type HubViewMode = "dashboard" | "chart";
 
-type DetailStage = 1 | 2 | 3;
 type WoExecutionStatus = "LIVE" | "PROCESSING" | "COMPLETE";
 type RowClassification = "GOOD" | "WARNING" | "BAD" | "UNKNOWN";
 type WoJobType = ReportRow["jobType"];
@@ -167,11 +163,6 @@ function compactTime(value: Date | null): string {
   });
 }
 
-function formatDateTime(value: Date | null): string {
-  if (!value) return "-";
-  return value.toLocaleString("en-GB");
-}
-
 function formatRelativeLogAge(value: number | Date | null): string {
   if (value == null) {
     return "No recent log";
@@ -196,21 +187,6 @@ function formatRelativeLogAge(value: number | Date | null): string {
 
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
-}
-
-function hasText(value: string | null | undefined): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function parseApiDate(value: string | null | undefined): Date | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-  return parsed;
 }
 
 function resolveWoId(row: ReportRow): string | null {
@@ -492,7 +468,13 @@ function buildDefaultAccumulator(woId: string, row: ReportRow): WoAccumulator {
   };
 }
 
-export default function ProductionHubV2() {
+interface ProductionHubV2Props {
+  viewMode?: HubViewMode;
+}
+
+export default function ProductionHubV2({
+  viewMode = "dashboard",
+}: ProductionHubV2Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
@@ -510,7 +492,6 @@ export default function ProductionHubV2() {
     new Map(),
   );
   const [selectedWoId, setSelectedWoId] = useState<string | null>(null);
-  const [detailStage, setDetailStage] = useState<DetailStage>(1);
   const [isOverlayOpen, setIsOverlayOpen] = useState(false);
   const overviewCacheRef = useRef<
     Map<string, { rows: ReportRow[]; fetchedAt: number }>
@@ -704,20 +685,26 @@ export default function ProductionHubV2() {
   useEffect(() => {
     if (topWoCards.length === 0) {
       setSelectedWoId(null);
-      setDetailStage(1);
       setIsOverlayOpen(false);
       return;
     }
 
-    if (
-      selectedWoId &&
-      !topWoCards.some((card) => card.woId === selectedWoId)
-    ) {
+    const selectedStillExists =
+      selectedWoId != null && topWoCards.some((card) => card.woId === selectedWoId);
+
+    if (viewMode === "chart") {
+      if (!selectedStillExists) {
+        setSelectedWoId(topWoCards[0]?.woId ?? null);
+      }
+      setIsOverlayOpen(false);
+      return;
+    }
+
+    if (selectedWoId && !selectedStillExists) {
       setSelectedWoId(null);
-      setDetailStage(1);
       setIsOverlayOpen(false);
     }
-  }, [selectedWoId, topWoCards]);
+  }, [selectedWoId, topWoCards, viewMode]);
 
   const selectedWoCard = useMemo(
     () => topWoCards.find((card) => card.woId === selectedWoId) || null,
@@ -787,79 +774,6 @@ export default function ProductionHubV2() {
     }
     return woDetailsById.get(woIdNum) || null;
   }, [selectedWoId, woDetailsById]);
-
-  const selectedWoStageData = useMemo(() => {
-    if (selectedWoRows.length === 0) {
-      return {
-        startTime: null as Date | null,
-        endTime: null as Date | null,
-        totalWindowSec: 0,
-        startComment: "-",
-        endComment: "-",
-        startEvent: "-",
-        endEvent: "-",
-      };
-    }
-
-    const latestRow = selectedWoRows[0]!;
-    const oldestRow = selectedWoRows[selectedWoRows.length - 1]!;
-    const woStartRow = [...selectedWoRows]
-      .reverse()
-      .find((row) => row.action === "WO_START");
-    const woStopRow = selectedWoRows.find((row) => row.action === "WO_STOP");
-    const apiStartTime = parseApiDate(selectedWoDetails?.start_time);
-    const apiEndTime = parseApiDate(selectedWoDetails?.end_time);
-
-    const startTime = apiStartTime || woStartRow?.logTime || oldestRow.logTime;
-    const endTime = apiEndTime || woStopRow?.logTime || latestRow.logTime;
-
-    const totalWindowSec =
-      selectedWoDetails && selectedWoDetails.duration > 0
-        ? selectedWoDetails.duration
-        : Math.max(
-          0,
-          Math.round((latestRow.timestamp - oldestRow.timestamp) / 1000),
-        );
-
-    const startComment =
-      (hasText(selectedWoDetails?.start_comment)
-        ? selectedWoDetails?.start_comment
-        : "") ||
-      (hasText(woStartRow?.startRowData?.comment)
-        ? woStartRow?.startRowData?.comment
-        : "") ||
-      (hasText(woStartRow?.woHeaderData?.startComment)
-        ? woStartRow?.woHeaderData?.startComment
-        : "") ||
-      (hasText(woStartRow?.originalLog?.start_comment as string | undefined)
-        ? (woStartRow?.originalLog?.start_comment as string)
-        : "") ||
-      "-";
-
-    const endComment =
-      (hasText(selectedWoDetails?.stop_comment)
-        ? selectedWoDetails?.stop_comment
-        : "") ||
-      (hasText(woStopRow?.stopRowData?.reason)
-        ? woStopRow?.stopRowData?.reason
-        : "") ||
-      (hasText(woStopRow?.originalLog?.stop_comment as string | undefined)
-        ? (woStopRow?.originalLog?.stop_comment as string)
-        : "") ||
-      "-";
-
-    return {
-      startTime,
-      endTime,
-      totalWindowSec,
-      startComment,
-      endComment,
-      startEvent:
-        woStartRow?.action || oldestRow.action || oldestRow.label || "WO_START",
-      endEvent:
-        woStopRow?.action || latestRow.action || latestRow.label || "WO_STOP",
-    };
-  }, [selectedWoRows, selectedWoDetails]);
 
   const ensureWoDetailsLoaded = useCallback(
     async (woIdValue: string | null) => {
@@ -1124,11 +1038,11 @@ export default function ProductionHubV2() {
   }, [activeMachineIds]);
 
   useEffect(() => {
-    if (!selectedWoId || detailStage < 2) {
+    if (!selectedWoId || (viewMode === "dashboard" && !isOverlayOpen)) {
       return;
     }
     void ensureWoDetailsLoaded(selectedWoId);
-  }, [detailStage, ensureWoDetailsLoaded, selectedWoId]);
+  }, [ensureWoDetailsLoaded, isOverlayOpen, selectedWoId, viewMode]);
 
   useEffect(() => {
     if (!TOKEN) {
@@ -1153,25 +1067,13 @@ export default function ProductionHubV2() {
     };
   }, []);
 
-  const selectedWoGoodRate =
-    selectedWoCard && selectedWoCard.totalCycles > 0
-      ? Math.round(
-        (selectedWoCard.goodCycles / selectedWoCard.totalCycles) * 100,
-      )
-      : 0;
-
   const closeOverlay = () => {
     setIsOverlayOpen(false);
-    if (selectedWoId) {
-      setDetailStage(2);
-      return;
-    }
-    setDetailStage(1);
+    setSelectedWoId(null);
   };
 
   const closeAllDetails = () => {
     setIsOverlayOpen(false);
-    setDetailStage(1);
     setSelectedWoId(null);
   };
 
@@ -1197,33 +1099,18 @@ export default function ProductionHubV2() {
   }, [isOverlayOpen]);
 
   const handleWoCardClick = (woId: string) => {
-    if (selectedWoId === woId && detailStage === 2 && !isOverlayOpen) {
-      setSelectedWoId(null);
-      setDetailStage(1);
-      return;
-    }
-
     setSelectedWoId(woId);
-    setDetailStage(2);
-    setIsOverlayOpen(false);
+    if (viewMode === "dashboard") {
+      setIsOverlayOpen(true);
+    }
     void ensureWoDetailsLoaded(woId);
   };
-
-  const openWoLogsOverlay = () => {
-    if (!selectedWoId) {
-      return;
-    }
-    void ensureWoDetailsLoaded(selectedWoId);
-    setDetailStage(3);
-    setIsOverlayOpen(true);
-  };
-
-  const backToSummary = () => {
-    setDetailStage(2);
-    setIsOverlayOpen(false);
-  };
   const overviewSummaryLabel =
-    searchQuery.trim().length > 0
+    viewMode === "chart"
+      ? selectedWoCard
+        ? `Chart page · WO-${selectedWoCard.woDisplayId}`
+        : `Chart page · ${overviewCards.length} available WOs`
+      : searchQuery.trim().length > 0
       ? `Today live board · ${overviewCards.length} matching WOs`
       : `Today live board · Showing ${visibleOverviewMachineIds.length} machines`;
   const overviewAgeLabel =
@@ -1241,9 +1128,23 @@ export default function ProductionHubV2() {
             <div className="flex flex-wrap items-center gap-2 text-xs sm:gap-3 sm:text-sm">
               <Link
                 to="/dashboard"
-                className="inline-flex h-9 items-center rounded-md bg-slate-900 px-3 font-medium text-white"
+                className={`inline-flex h-9 items-center rounded-md px-3 font-medium ${
+                  viewMode === "dashboard"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                }`}
               >
                 Dashboard
+              </Link>
+              <Link
+                to="/chart"
+                className={`inline-flex h-9 items-center rounded-md px-3 ${
+                  viewMode === "chart"
+                    ? "bg-slate-900 font-medium text-white"
+                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                }`}
+              >
+                Chart
               </Link>
               <Link
                 to="/report"
@@ -1289,10 +1190,34 @@ export default function ProductionHubV2() {
             </div>
           ) : null}
 
+          {viewMode === "chart" ? (
+            selectedWoCard ? (
+              <WoChartWorkspace
+                woDisplayId={selectedWoCard.woDisplayId}
+                machineId={selectedWoCard.machineId}
+                operatorName={selectedWoCard.operatorName}
+                jobType={selectedWoCard.jobType}
+                executionStatus={selectedWoCard.executionStatus}
+                executionStatusClassName={
+                  executionStatusBadgeClass[selectedWoCard.executionStatus]
+                }
+                jobTypeClassName={getJobTypeBadgeClass(selectedWoCard.jobType)}
+                rows={selectedWoRows}
+                woDetails={selectedWoDetails}
+              />
+            ) : (
+              <section className="mt-4 rounded-[28px] border border-dashed border-slate-300 bg-white/90 p-10 text-center text-sm text-slate-500">
+                {loading
+                  ? "Preparing chart workspace..."
+                  : "No work order is ready for the chart section yet."}
+              </section>
+            )
+          ) : null}
+
           <section className="mt-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h1 className="text-lg font-semibold text-slate-800 sm:text-xl">
-                Machine Overview
+                {viewMode === "chart" ? "Chart Page" : "Machine Overview"}
               </h1>
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <span className="rounded-full bg-white px-3 py-1 text-xs text-slate-500">
@@ -1314,7 +1239,88 @@ export default function ProductionHubV2() {
               </div>
             </div>
 
-            {loading &&
+            {viewMode === "chart" ? (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm text-slate-500">
+                  Select a work order below to change the chart page.
+                </p>
+              </div>
+            ) : null}
+
+            {viewMode === "chart" ? (
+              loading &&
+              !lastRefreshed &&
+              topWoCards.length === 0 &&
+              machineSnapshots.length === 0 ? (
+                <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+                  Loading chart page data...
+                </div>
+              ) : topWoCards.length === 0 ? (
+                <div className="rounded-[28px] border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+                  No work orders available for the chart page.
+                </div>
+              ) : (
+                <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_18px_42px_-28px_rgba(15,23,42,0.35)]">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm text-slate-500">
+                      Choose a work order to update the separate chart page.
+                    </p>
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600">
+                      {topWoCards.length.toLocaleString()} work orders
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    {topWoCards.map((card) => {
+                      const isActive = selectedWoId === card.woId;
+                      return (
+                        <button
+                          key={card.woId}
+                          type="button"
+                          onClick={() => handleWoCardClick(card.woId)}
+                          className={`min-w-[220px] rounded-2xl border px-4 py-3 text-left transition ${
+                            isActive
+                              ? "border-slate-900 bg-slate-900 text-white"
+                              : "border-slate-200 bg-slate-50 text-slate-800 hover:border-slate-300 hover:bg-white"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold">{`WO-${card.woDisplayId}`}</p>
+                              <p
+                                className={`mt-1 text-xs ${
+                                  isActive ? "text-slate-300" : "text-slate-500"
+                                }`}
+                              >
+                                {card.machineId != null
+                                  ? getMachineLabel(card.machineId)
+                                  : "Machine -"}
+                              </p>
+                            </div>
+                            <span
+                              className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold ring-1 ${
+                                isActive
+                                  ? "border-white/20 bg-white/10 text-white ring-white/20"
+                                  : getWoOverviewStatusBadgeClass(card.executionStatus)
+                              }`}
+                            >
+                              {card.executionStatus}
+                            </span>
+                          </div>
+                          <p
+                            className={`mt-3 text-xs ${
+                              isActive ? "text-slate-300" : "text-slate-500"
+                            }`}
+                          >
+                            {`${card.operatorName} · ${card.jobType}`}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )
+            ) : loading &&
               !lastRefreshed &&
               topWoCards.length === 0 &&
               machineSnapshots.length === 0 ? (
@@ -1423,182 +1429,88 @@ export default function ProductionHubV2() {
                   const recentLogAgeText = formatRelativeLogAge(
                     card.latestTimestamp,
                   );
-                  const isStageTwo =
-                    selectedWoId === card.woId &&
-                    detailStage === 2 &&
-                    !isOverlayOpen;
                   const isActive = selectedWoId === card.woId;
 
                   return (
-                    <Expandable
+                    <button
+                      type="button"
                       key={card.woId}
-                      expanded={isStageTwo}
-                      onToggle={() => handleWoCardClick(card.woId)}
-                      transitionDuration={0.22}
+                      onClick={() => handleWoCardClick(card.woId)}
                       className={`rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 ${getWoOverviewCardSurfaceClass(
                         card.jobType,
                         card.executionStatus,
                         isActive,
                       )}`}
                     >
-                      <ExpandableTrigger className="w-full text-left">
-                        <div className="mb-3 flex items-start justify-between gap-2">
-                          <div className="flex items-start gap-3 text-sm text-slate-600">
-                            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/85 shadow-sm">
-                              <JobTypeIcon className="h-5 w-5" />
-                            </span>
-                            <div className="flex flex-wrap gap-1">
-                              {card.jobTypeTags.slice(0, 3).map((jobTag) => (
-                                <span
-                                  key={`${card.woId}-${jobTag.jobType}`}
-                                  className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ring-1 ${getWoOverviewJobTypeBadgeClass(jobTag.jobType)}`}
-                                >
-                                  {jobTag.jobType}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="flex flex-col items-end gap-1">
-                            <span
-                              className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ring-1 ${getWoOverviewStatusBadgeClass(card.executionStatus)}`}
-                            >
-                              {card.executionStatus}
-                            </span>
-                            <span className="text-[10px] font-medium text-slate-400">
-                              {recentLogAgeText}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="space-y-1">
-                          <p className="text-lg font-bold tracking-tight text-slate-900">
-                            {card.machineId != null ? getMachineLabel(card.machineId) : "Machine -"}
-                          </p>
-                          <p className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">
-                            {card.operatorName}
-                          </p>
-                        </div>
-                        <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-800">{`WO-${card.woDisplayId}`}</p>
-
-                        <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
-                          <p className="text-slate-500">PCL Time</p>
-                          <p className="font-medium text-slate-700">
-                            {card.pclText}
-                          </p>
-                          <p className="text-slate-500">Cycles</p>
-                          <p className="font-medium text-slate-700">
-                            {card.totalCycles}
-                          </p>
-                          <p className="text-slate-500">Total</p>
-                          <p className="font-medium text-slate-700">
-                            {formatDuration(card.totalDurationSec)}
-                          </p>
-                        </div>
-
-                        <div className="mt-3 border-t border-slate-100 pt-2.5 text-[11px] text-slate-500">
-                          {isStageTwo
-                            ? "Summary expanded"
-                            : "Click to expand summary"}
-                        </div>
-                      </ExpandableTrigger>
-
-                      <ExpandableContent
-                        preset="slide-up"
-                        className="mt-3 border-t border-slate-100 pt-3"
-                      >
-                        <article className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <h2 className="text-sm font-semibold text-slate-800">
-                              WO Summary
-                            </h2>
-                            <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600">
-                              Stage 2
-                            </span>
-                          </div>
-
-                          <div className="grid gap-2 sm:grid-cols-2">
-                            <div className="rounded-md border border-slate-200 bg-white p-2">
-                              <p className="text-[11px] text-slate-500">
-                                Starting Time
-                              </p>
-                              <p className="mt-0.5 text-xs font-semibold text-slate-800">
-                                {formatDateTime(selectedWoStageData.startTime)}
-                              </p>
-                            </div>
-                            <div className="rounded-md border border-slate-200 bg-white p-2">
-                              <p className="text-[11px] text-slate-500">
-                                Ending Time
-                              </p>
-                              <p className="mt-0.5 text-xs font-semibold text-slate-800">
-                                {formatDateTime(selectedWoStageData.endTime)}
-                              </p>
-                            </div>
-                            <div className="rounded-md border border-slate-200 bg-white p-2">
-                              <p className="text-[11px] text-slate-500">
-                                Total
-                              </p>
-                              <p className="mt-0.5 text-xs font-semibold text-slate-800">
-                                {formatDuration(
-                                  selectedWoStageData.totalWindowSec,
-                                )}
-                              </p>
-                            </div>
-                            <div className="rounded-md border border-slate-200 bg-white p-2">
-                              <p className="text-[11px] text-slate-500">
-                                Good Rate
-                              </p>
-                              <p className="mt-0.5 text-xs font-semibold text-slate-800">{`${selectedWoGoodRate}%`}</p>
-                            </div>
-                          </div>
-
-                          <div className="mt-2 rounded-md border border-slate-200 bg-white p-2.5">
-                            <div className="mb-1.5 flex items-center justify-between gap-2">
-                              <p className="text-xs font-semibold text-slate-800">
-                                Comments
-                              </p>
+                      <div className="mb-3 flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-3 text-sm text-slate-600">
+                          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/85 shadow-sm">
+                            <JobTypeIcon className="h-5 w-5" />
+                          </span>
+                          <div className="flex flex-wrap gap-1">
+                            {card.jobTypeTags.slice(0, 3).map((jobTag) => (
                               <span
-                                className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${getJobTypeBadgeClass(card.jobType)}`}
+                                key={`${card.woId}-${jobTag.jobType}`}
+                                className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ring-1 ${getWoOverviewJobTypeBadgeClass(jobTag.jobType)}`}
                               >
-                                {card.jobType}
+                                {jobTag.jobType}
                               </span>
-                            </div>
-                            <div className="space-y-2">
-                              <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
-                                <p className="text-[11px] text-slate-500">{`Starting Comment · ${selectedWoStageData.startEvent}`}</p>
-                                <p className="mt-0.5 text-xs text-slate-700">
-                                  {selectedWoStageData.startComment}
-                                </p>
-                              </div>
-                              <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
-                                <p className="text-[11px] text-slate-500">{`Ending Comment · ${selectedWoStageData.endEvent}`}</p>
-                                <p className="mt-0.5 text-xs text-slate-700">
-                                  {selectedWoStageData.endComment}
-                                </p>
-                              </div>
-                            </div>
+                            ))}
                           </div>
-                        </article>
-
-                        <div className="mt-2">
-                          <button
-                            type="button"
-                            onClick={openWoLogsOverlay}
-                            className="inline-flex h-8 items-center rounded-md border border-slate-200 bg-slate-900 px-3 text-xs font-medium text-white hover:bg-slate-800"
-                          >
-                            Open WO Logs
-                          </button>
                         </div>
-                      </ExpandableContent>
-                    </Expandable>
+                        <div className="flex flex-col items-end gap-1">
+                          <span
+                            className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ring-1 ${getWoOverviewStatusBadgeClass(card.executionStatus)}`}
+                          >
+                            {card.executionStatus}
+                          </span>
+                          <span className="text-[10px] font-medium text-slate-400">
+                            {recentLogAgeText}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <p className="text-lg font-bold tracking-tight text-slate-900">
+                          {card.machineId != null ? getMachineLabel(card.machineId) : "Machine -"}
+                        </p>
+                        <p className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">
+                          {card.operatorName}
+                        </p>
+                      </div>
+                      <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-800">{`WO-${card.woDisplayId}`}</p>
+
+                      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                        <p className="text-slate-500">PCL Time</p>
+                        <p className="font-medium text-slate-700">
+                          {card.pclText}
+                        </p>
+                        <p className="text-slate-500">Cycles</p>
+                        <p className="font-medium text-slate-700">
+                          {card.totalCycles}
+                        </p>
+                        <p className="text-slate-500">Total</p>
+                        <p className="font-medium text-slate-700">
+                          {formatDuration(card.totalDurationSec)}
+                        </p>
+                      </div>
+
+                      <div className="mt-3 border-t border-slate-100 pt-2.5 text-[11px] text-slate-500">
+                        {viewMode === "chart"
+                          ? "Click to open chart section"
+                          : "Click to open details"}
+                      </div>
+                    </button>
                   );
                 })}
               </div>
             )}
+
           </section>
         </section>
       </main>
 
-      {isOverlayOpen && selectedWoCard && detailStage === 3 ? (
+      {viewMode === "dashboard" && isOverlayOpen && selectedWoCard ? (
         <div
           className="fixed inset-0 z-50 bg-slate-950/35 p-2 backdrop-blur-[2px] sm:p-5"
           onClick={closeOverlay}
@@ -1614,17 +1526,12 @@ export default function ProductionHubV2() {
                   onClick={closeAllDetails}
                   className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-600 hover:bg-slate-50"
                 >
-                  1. Machine Overview
+                  Machine Overview
                 </button>
-                <span
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-600"
-                >
-                  2. WO Summary
-                </span>
                 <span
                   className="rounded-full bg-slate-900 px-3 py-1 text-white"
                 >
-                  3. WO Logs
+                  WO Details
                 </span>
               </div>
 
@@ -1677,7 +1584,7 @@ export default function ProductionHubV2() {
               fallbackRows={selectedWoRows}
               woDetails={selectedWoDetails}
               deviceNameMap={deviceNameMap}
-              onBack={backToSummary}
+              onBack={closeAllDetails}
             />
           </div>
         </div>

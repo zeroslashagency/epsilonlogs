@@ -36,6 +36,7 @@ import {
   fetchDeviceNameMap,
 } from "./api-client";
 import { buildReport } from "./report-builder";
+import { buildWebLogRows } from "./raw-log-rows";
 import { extractWoIds } from "./log-normalizer";
 import { formatDuration } from "./format-utils";
 import { DateRangePicker } from "../components/ui/DateRangePicker";
@@ -110,6 +111,7 @@ export default function ReportPage() {
   const [loading, setLoading] = useState(false);
   const [showPreloader, setShowPreloader] = useState(false);
   const [rows, setRows] = useState<ReportRow[]>([]);
+  const [groupedRows, setGroupedRows] = useState<ReportRow[]>([]);
   const [stats, setStats] = useState<ReportStats | null>(null);
   const [woDetailsMap, setWoDetailsMap] = useState<Map<number, WoDetails>>(
     new Map(),
@@ -164,6 +166,11 @@ export default function ReportPage() {
     [rows],
   );
 
+  const groupedExportRows = useMemo(
+    () => groupedRows.filter((row) => !row.excludeFromExport),
+    [groupedRows],
+  );
+
   // Derive available filter options from dashboard rows
   const filterOptions = useMemo(
     () => extractFilterOptions(dashboardRows),
@@ -200,6 +207,7 @@ export default function ReportPage() {
     setShowPreloader(true);
     setError(null);
     setRows([]);
+    setGroupedRows([]);
     setStats(null);
     setWoDetailsMap(new Map());
     setDeviceNameMap(new Map());
@@ -226,7 +234,8 @@ export default function ReportPage() {
         config,
       );
 
-      setRows(reportRows);
+      setRows(buildWebLogRows(logs, reportRows, detailsMap));
+      setGroupedRows(reportRows);
       setStats(reportStats);
       setWoDetailsMap(detailsMap);
       setDeviceNameMap(fetchedDeviceNameMap);
@@ -276,6 +285,13 @@ export default function ReportPage() {
           >
             <BarChart3 className="h-3.5 w-3.5" />
             Dashboard
+          </Link>
+          <Link
+            to="/chart"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-sky-50 text-sky-700 text-xs font-medium border border-sky-200 hover:bg-sky-100 transition-colors"
+          >
+            <Activity className="h-3.5 w-3.5" />
+            Chart
           </Link>
           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-medium border border-indigo-200">
             <FileText className="h-3.5 w-3.5" />
@@ -499,7 +515,7 @@ export default function ReportPage() {
                 </div>
                 Results Analysis
                 <span className="ml-1 px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-600 text-xs font-semibold">
-                  {filteredRows.length.toLocaleString()} rows
+                  {filteredRows.length.toLocaleString()} web log rows
                 </span>
               </h2>
               <div className="flex items-center gap-2" data-pdf-exclude="true">
@@ -537,7 +553,7 @@ export default function ReportPage() {
                         await import("./export-utils");
                       if (!stats) return;
                       await exportToGroupedExcel({
-                        rows: exportRows,
+                        rows: groupedExportRows,
                         stats,
                         woDetailsMap,
                         deviceNameMap,

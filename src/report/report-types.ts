@@ -24,6 +24,10 @@ export interface DeviceLogEntry {
     duration?: number;
     uid?: number;
     job_type?: string | number;
+    completionSource?: "M30";
+    isSynthetic?: boolean;
+    m30BurstCount?: number;
+    m30OriginalAction?: string;
     [key: string]: unknown;
 }
 
@@ -36,6 +40,44 @@ export interface DeviceLogApiResponse {
             total_pages: number;
             current_page: number;
         };
+    };
+    error?: {
+        message: string;
+    };
+}
+
+export interface WoSummaryEntry {
+    id: number;
+    wo_id: string;
+    start_uid?: number | null;
+    device_id: number;
+    setting: string;
+    start_time: string | null;
+    end_time: string | null;
+    part_no: string;
+    alloted_qty: number;
+    start_comment?: string;
+    ok_qty: number;
+    reject_qty: number;
+    stop_comment?: string;
+    status: string;
+    stop_uid?: number | null;
+    pcl?: string | number | null;
+    duration: number | null;
+    target_duration?: number | null;
+    idle_time?: number | null;
+}
+
+export interface WoSummaryApiResponse {
+    success: boolean;
+    result?: {
+        work_orders: WoSummaryEntry[];
+        pagination?: {
+            total_items: number;
+            total_pages: number;
+            current_page: number;
+        };
+        total_duration?: number;
     };
     error?: {
         message: string;
@@ -76,6 +118,8 @@ export interface WoDetails {
     time_saved?: number | null;    // time_saved from API
     load_time?: number | null;     // load_time from API
     idle_time?: number | null;     // idle_time from API
+    battery_level?: number | null;
+    status?: string | null;
 }
 
 // --- Internal Processing Types ---
@@ -126,6 +170,7 @@ export interface SpindleCycle {
     onLog: DeviceLogEntry;
     offLog: DeviceLogEntry;
     durationSec: number;
+    completionSource?: "M30";
 }
 
 export interface PausePeriod {
@@ -202,6 +247,7 @@ export interface ReportRow {
     logId?: number;
     logTime: Date;
     action?: string;
+    displayAction?: string;
     durationText?: string | undefined;
     durationSec?: number | undefined;
     label?: string | undefined;
@@ -211,6 +257,7 @@ export interface ReportRow {
     classification?: "GOOD" | "WARNING" | "BAD" | "UNKNOWN";
     reasonCode?: string;
     reasonText?: string;
+    completionSource?: "M30";
 
     // Styling hints
     isJobBlock?: boolean | undefined;

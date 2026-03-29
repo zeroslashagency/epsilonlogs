@@ -7,6 +7,7 @@ const MAX_GAP_SEC = 900; // 15 min
 export interface GroupingOptions {
     toleranceSec?: number;
     splitDisableWindows?: KeySplitDisableWindow[];
+    startingJobNumber?: number;
 }
 
 function isSplitDisabledForGap(
@@ -58,7 +59,7 @@ export function groupCyclesIntoJobs(
         return blocks;
     }
 
-    let jobCounter = 1;
+    let jobCounter = options.startingJobNumber ?? 1;
     let idx = 0;
 
     while (idx < cycles.length) {
@@ -84,6 +85,13 @@ export function groupCyclesIntoJobs(
             currentCycles.push(cycle);
             sumSec += cycle.durationSec;
             idx++;
+
+            if (cycle.completionSource === "M30") {
+                bestErr = 0;
+                bestEndIdx = currentCycles.length - 1;
+                bestSum = sumSec;
+                break;
+            }
 
             const err = Math.abs(sumSec - targetPcl!);
             if (err < bestErr) {

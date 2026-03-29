@@ -1166,6 +1166,13 @@ export default function PersonnelReportPage() {
             <FileText className="h-3.5 w-3.5" />
             Machine Report
           </Link>
+          <Link
+            to="/chart"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-sky-50 text-sky-700 text-xs font-medium border border-sky-200 hover:bg-sky-100 transition-colors"
+          >
+            <Activity className="h-3.5 w-3.5" />
+            Chart
+          </Link>
           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-violet-100 text-violet-700 text-xs font-medium border border-violet-200">
             <Users className="h-3.5 w-3.5" />
             Personnel Report

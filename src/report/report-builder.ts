@@ -1,5 +1,6 @@
 import { DeviceLogEntry, JobBlock, JobType, OperatorSummary, ReportConfig, ReportRow, ReportStats, WoBreakdown, WoDetails } from "./report-types";
 import { normalizeLogs } from "./log-normalizer";
+import { applyM30CompletionSignals } from "./m30-actions";
 import { segmentLogs } from "./wo-segmenter";
 import { pairSpindleCycles } from "./spindle-pairer";
 import { groupCyclesIntoJobs } from "./job-grouper";
@@ -17,7 +18,8 @@ export function buildReport(
 ): { rows: ReportRow[]; stats: ReportStats } {
 
     // 1. Normalize (dedupe, sort ASC)
-    const logs = normalizeLogs(rawLogs);
+    const normalizedLogs = normalizeLogs(rawLogs);
+    const logs = applyM30CompletionSignals(normalizedLogs);
     console.log(`Normalized ${logs.length} logs`);
 
     // 2. Segment by WO_START..WO_STOP
@@ -44,6 +46,7 @@ export function buildReport(
     let totalAllotedQty = 0;
     let totalOkQty = 0;
     let totalRejectQty = 0;
+    const nextJobNumberByWo = new Map<number, number>();
 
     // 3. Process each segment
     for (const segment of segments) {
@@ -115,10 +118,13 @@ export function buildReport(
                 });
             } else {
                 // PRODUCTION: Standard cycle grouping
+                const startingJobNumber = nextJobNumberByWo.get(segment.woId) ?? 1;
                 blocks = groupCyclesIntoJobs(segment.spindleCycles, details, {
                     toleranceSec: config.toleranceSec,
                     splitDisableWindows,
+                    startingJobNumber,
                 });
+                nextJobNumberByWo.set(segment.woId, startingJobNumber + blocks.length);
 
                 // FALLBACK: Non-spindle machine — 0 cycles but has ok_qty and PCL
                 if (blocks.length === 0 && details.ok_qty > 0) {
@@ -289,7 +295,17 @@ export function buildReport(
     };
 
     // 6. Reverse chronological sort (latest on top)
-    allRows.sort((a, b) => b.timestamp - a.timestamp);
+    allRows.sort((a, b) => {
+        if (b.timestamp !== a.timestamp) {
+            return b.timestamp - a.timestamp;
+        }
+        const aLogId = typeof a.logId === "number" ? a.logId : -1;
+        const bLogId = typeof b.logId === "number" ? b.logId : -1;
+        if (bLogId !== aLogId) {
+            return bLogId - aLogId;
+        }
+        return b.rowId.localeCompare(a.rowId);
+    });
 
     // 7. Assign S.No — skip computed/banner rows
     let sNoCounter = 1;

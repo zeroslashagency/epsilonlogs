@@ -3,6 +3,7 @@ export type MachineType = 'VMC' | 'CNC';
 export interface MachineInfo {
     type: MachineType;
     label: string;
+    supportsM30Completion?: boolean;
 }
 
 export const MACHINE_CONFIG: Record<number, MachineInfo> = {
@@ -10,7 +11,7 @@ export const MACHINE_CONFIG: Record<number, MachineInfo> = {
     12: { type: 'VMC', label: 'VMC 2' },
     13: { type: 'VMC', label: 'VMC 3' },
     14: { type: 'VMC', label: 'VMC 4' },
-    15: { type: 'VMC', label: 'VMC 5' },
+    15: { type: 'VMC', label: 'VMC 5', supportsM30Completion: true },
     16: { type: 'VMC', label: 'VMC 6' },
     19: { type: 'VMC', label: 'VMC 7' },
     18: { type: 'CNC', label: 'CNC 1' },
@@ -41,4 +42,8 @@ export function getMachineLabel(deviceId: number): string {
 
 export function getMachineType(deviceId: number): MachineType | null {
     return MACHINE_CONFIG[deviceId]?.type ?? null;
+}
+
+export function supportsM30Completion(deviceId: number): boolean {
+    return MACHINE_CONFIG[deviceId]?.supportsM30Completion === true;
 }

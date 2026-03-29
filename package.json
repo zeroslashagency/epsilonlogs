@@ -14,6 +14,9 @@
     "bench:report-strategies": "tsx scripts/benchmark-report-strategies.ts"
   },
   "dependencies": {
+    "@radix-ui/react-collapsible": "^1.1.12",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@svar-ui/react-gantt": "^2.6.1",
     "@types/react-router-dom": "^5.3.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
