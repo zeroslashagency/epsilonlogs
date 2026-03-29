@@ -38,6 +38,7 @@ const HOUR_COLUMNS = (7 * HOURS_PER_DAY) / HOUR_STEP;
 const DAY_COLUMN_SPAN = HOURS_PER_DAY / HOUR_STEP;
 const TIMELINE_MIN_WIDTH =
   MACHINE_COLUMN_WIDTH + HOUR_COLUMNS * HOUR_CELL_WIDTH;
+const weeklyWoRequestCache = new Map<string, Promise<WoSummaryEntry[]>>();
 
 interface TimelineWindow {
   machineId: number;
@@ -511,7 +512,6 @@ export default function ChartPage() {
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [weekShift, setWeekShift] = useState(0);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const detailRequestsRef = useRef<Set<number>>(new Set());
 
   const weekRange = useMemo(() => buildWeekRange(weekShift), [weekShift]);
@@ -522,30 +522,46 @@ export default function ChartPage() {
       return;
     }
 
-    const controller = new AbortController();
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = controller;
+    let isActive = true;
 
     async function loadWorkOrders() {
       setLoading(true);
       setError(null);
 
       try {
+        const startDate = formatDateForApi(weekRange.start);
+        const endDate = formatDateForApi(weekRange.end);
         const result = await Promise.all(
           DEFAULT_DASHBOARD_MACHINE_IDS.map((deviceId) =>
-            fetchWoSummaries(
-              {
-                startDate: formatDateForApi(weekRange.start),
-                endDate: formatDateForApi(weekRange.end),
+            (() => {
+              const cacheKey = [
+                startDate,
+                endDate,
                 deviceId,
-              },
-              TOKEN,
-              controller.signal,
-            ),
+                refreshTick,
+              ].join("|");
+              const cached = weeklyWoRequestCache.get(cacheKey);
+
+              if (cached) {
+                return cached;
+              }
+
+              const request = fetchWoSummaries(
+                {
+                  startDate,
+                  endDate,
+                  deviceId,
+                },
+                TOKEN,
+              );
+
+              weeklyWoRequestCache.set(cacheKey, request);
+              return request;
+            })(),
           ),
         );
 
-        if (controller.signal.aborted) {
+        if (!isActive) {
           return;
         }
 
@@ -560,7 +576,7 @@ export default function ChartPage() {
         detailRequestsRef.current.clear();
         setLastRefreshed(new Date());
       } catch (fetchError) {
-        if (controller.signal.aborted) {
+        if (!isActive) {
           return;
         }
 
@@ -570,7 +586,7 @@ export default function ChartPage() {
             : "Failed to load the weekly machine timeline.",
         );
       } finally {
-        if (!controller.signal.aborted) {
+        if (isActive) {
           setLoading(false);
         }
       }
@@ -578,7 +594,9 @@ export default function ChartPage() {
 
     void loadWorkOrders();
 
-    return () => controller.abort();
+    return () => {
+      isActive = false;
+    };
   }, [refreshTick, weekRange.end, weekRange.start]);
 
   const timelineWindows = useMemo(
