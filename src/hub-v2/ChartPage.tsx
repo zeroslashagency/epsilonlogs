@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle,
@@ -534,6 +535,13 @@ function TimelineBarCard({
   details: WoDetails | null | undefined;
   onInspect: (woId: number) => void;
 }) {
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const [isPopupOpen, setIsPopupOpen] = useState(false);
+  const [popupPosition, setPopupPosition] = useState<{
+    left: number;
+    top: number;
+    placement: "top" | "bottom";
+  } | null>(null);
   const statusTone = getStatusTone(bar.status);
   const jobTypeLabel = getJobTypeLabel(details);
   const operatorName =
@@ -542,136 +550,204 @@ function TimelineBarCard({
       ? `UID ${details.start_uid}`
       : "Loading...");
 
+  useEffect(() => {
+    if (!isPopupOpen) {
+      return;
+    }
+
+    function updatePopupPosition() {
+      const element = barRef.current;
+      if (!element) {
+        return;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const popupWidth = 288;
+      const popupHeight = 320;
+      const viewportPadding = 16;
+      const centeredLeft = rect.left + rect.width / 2;
+      const minLeft = popupWidth / 2 + viewportPadding;
+      const maxLeft = window.innerWidth - popupWidth / 2 - viewportPadding;
+      const left = Math.min(maxLeft, Math.max(minLeft, centeredLeft));
+      const showAbove = rect.top >= popupHeight + viewportPadding;
+
+      setPopupPosition({
+        left,
+        top: showAbove ? rect.top - 10 : rect.bottom + 10,
+        placement: showAbove ? "top" : "bottom",
+      });
+    }
+
+    updatePopupPosition();
+    window.addEventListener("resize", updatePopupPosition);
+    window.addEventListener("scroll", updatePopupPosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updatePopupPosition);
+      window.removeEventListener("scroll", updatePopupPosition, true);
+    };
+  }, [isPopupOpen]);
+
   return (
-    <div
-      className={cn(
-        "group absolute flex min-h-[18px] items-center rounded-md border px-2 text-[11px] font-semibold shadow-sm outline-none",
-        getJobTypeTone(jobTypeLabel, bar.status),
-      )}
-      tabIndex={0}
-      onMouseEnter={() => onInspect(bar.woId)}
-      onFocus={() => onInspect(bar.woId)}
-      style={{
-        left: `${bar.leftPercent}%`,
-        width: `${bar.widthPercent}%`,
-        top: `${12 + bar.laneIndex * (BAR_HEIGHT + BAR_GAP)}px`,
-        height: `${BAR_HEIGHT}px`,
-      }}
-      aria-label={`${bar.woLabel}, ${bar.status}, ${formatWindowLabel(bar.start, bar.end)}`}
-    >
-      <span className="truncate">{bar.woLabel}</span>
-      <div className="pointer-events-none absolute bottom-[calc(100%+10px)] left-1/2 z-40 hidden w-72 -translate-x-1/2 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-2xl shadow-slate-300/30 group-hover:block group-focus-visible:block">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              {bar.machineLabel}
-            </p>
-            <p className="mt-1 text-base font-semibold text-slate-900">
-              {bar.woLabel}
-            </p>
-            <p className="mt-1 text-xs text-slate-600">{operatorName}</p>
-          </div>
-          <Badge
-            variant="outline"
-            className={cn(
-              "shrink-0 rounded-full px-2.5 py-1 text-[11px]",
-              statusTone.badge,
-            )}
-          >
-            {bar.status}
-          </Badge>
-        </div>
-
-        <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs text-slate-600">
-          <div>
-            <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
-              Job Type
-            </p>
-            <p className="mt-1 text-sm font-semibold text-slate-900">
-              {jobTypeLabel}
-            </p>
-          </div>
-          <div>
-            <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
-              Part No
-            </p>
-            <p className="mt-1 text-sm font-semibold text-slate-900">
-              {bar.partNo}
-            </p>
-          </div>
-          <div>
-            <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
-              Setting
-            </p>
-            <p className="mt-1 truncate text-sm font-semibold text-slate-900">
-              {bar.setting}
-            </p>
-          </div>
-          <div>
-            <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
-              Start
-            </p>
-            <p className="mt-1 text-sm font-semibold text-slate-900">
-              {formatDateTime(bar.start)}
-            </p>
-          </div>
-          <div>
-            <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
-              End
-            </p>
-            <p className="mt-1 text-sm font-semibold text-slate-900">
-              {formatDateTime(bar.end)}
-            </p>
-          </div>
-          <div>
-            <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
-              Duration
-            </p>
-            <p className="mt-1 text-sm font-semibold text-slate-900">
-              {formatDuration(bar.durationSeconds)}
-            </p>
-          </div>
-          <div>
-            <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
-              Idle Time
-            </p>
-            <p className="mt-1 text-sm font-semibold text-slate-900">
-              {formatDuration(bar.idleTimeSeconds)}
-            </p>
-          </div>
-          <div>
-            <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
-              Alloted Qty
-            </p>
-            <p className="mt-1 text-sm font-semibold text-slate-900">
-              {bar.allotedQty}
-            </p>
-          </div>
-          <div>
-            <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
-              OK / Reject
-            </p>
-            <p className="mt-1 text-sm font-semibold text-slate-900">
-              {bar.okQty} / {bar.rejectQty}
-            </p>
-          </div>
-        </div>
-
-        {bar.startComment ? (
-          <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            <span className="font-medium text-slate-700">Start Comment:</span>{" "}
-            {bar.startComment}
-          </div>
-        ) : null}
-
-        {bar.stopComment ? (
-          <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            <span className="font-medium text-slate-700">Stop Comment:</span>{" "}
-            {bar.stopComment}
-          </div>
-        ) : null}
+    <>
+      <div
+        ref={barRef}
+        className={cn(
+          "absolute flex min-h-[18px] items-center rounded-md border px-2 text-[11px] font-semibold shadow-sm outline-none",
+          getJobTypeTone(jobTypeLabel, bar.status),
+        )}
+        tabIndex={0}
+        onMouseEnter={() => {
+          onInspect(bar.woId);
+          setIsPopupOpen(true);
+        }}
+        onMouseLeave={() => setIsPopupOpen(false)}
+        onFocus={() => {
+          onInspect(bar.woId);
+          setIsPopupOpen(true);
+        }}
+        onBlur={() => setIsPopupOpen(false)}
+        style={{
+          left: `${bar.leftPercent}%`,
+          width: `${bar.widthPercent}%`,
+          top: `${12 + bar.laneIndex * (BAR_HEIGHT + BAR_GAP)}px`,
+          height: `${BAR_HEIGHT}px`,
+        }}
+        aria-label={`${bar.woLabel}, ${bar.status}, ${formatWindowLabel(bar.start, bar.end)}`}
+      >
+        <span className="truncate">{bar.woLabel}</span>
       </div>
-    </div>
+      {isPopupOpen && popupPosition && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed z-[120] w-72 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-2xl shadow-slate-300/30"
+              style={{
+                left: `${popupPosition.left}px`,
+                top: `${popupPosition.top}px`,
+                transform:
+                  popupPosition.placement === "top"
+                    ? "translate(-50%, -100%)"
+                    : "translate(-50%, 0)",
+              }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    {bar.machineLabel}
+                  </p>
+                  <p className="mt-1 text-base font-semibold text-slate-900">
+                    {bar.woLabel}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">{operatorName}</p>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "shrink-0 rounded-full px-2.5 py-1 text-[11px]",
+                    statusTone.badge,
+                  )}
+                >
+                  {bar.status}
+                </Badge>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs text-slate-600">
+                <div>
+                  <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
+                    Job Type
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {jobTypeLabel}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
+                    Part No
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {bar.partNo}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
+                    Setting
+                  </p>
+                  <p className="mt-1 truncate text-sm font-semibold text-slate-900">
+                    {bar.setting}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
+                    Start
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {formatDateTime(bar.start)}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
+                    End
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {formatDateTime(bar.end)}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
+                    Duration
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {formatDuration(bar.durationSeconds)}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
+                    Idle Time
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {formatDuration(bar.idleTimeSeconds)}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
+                    Alloted Qty
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {bar.allotedQty}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
+                    OK / Reject
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
+                    {bar.okQty} / {bar.rejectQty}
+                  </p>
+                </div>
+              </div>
+
+              {bar.startComment ? (
+                <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  <span className="font-medium text-slate-700">
+                    Start Comment:
+                  </span>{" "}
+                  {bar.startComment}
+                </div>
+              ) : null}
+
+              {bar.stopComment ? (
+                <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  <span className="font-medium text-slate-700">
+                    Stop Comment:
+                  </span>{" "}
+                  {bar.stopComment}
+                </div>
+              ) : null}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 
