@@ -383,6 +383,12 @@ function getJobTypeLabel(details: WoDetails | null | undefined) {
 }
 
 function getJobTypeTone(jobTypeLabel: string, status: string) {
+  const normalizedStatus = status.toUpperCase();
+
+  if (normalizedStatus.includes("PAUSE")) {
+    return "border-amber-300 bg-amber-500 text-white shadow-amber-200/70";
+  }
+
   switch (jobTypeLabel) {
     case "Production":
       return "border-emerald-300 bg-emerald-500 text-white shadow-emerald-200/70";
