@@ -9,6 +9,7 @@ import {
 
 const API_BASE_URL = "/api/v2";
 const WO_API_BASE_URL = "/api/v1";
+const woDetailsRequestCache = new Map<number, Promise<WoDetails | null>>();
 
 interface DevicesApiResponse {
   success: boolean;
@@ -269,66 +270,79 @@ export async function fetchWoDetails(
   woId: number,
   token: string,
 ): Promise<WoDetails | null> {
+  const cachedRequest = woDetailsRequestCache.get(woId);
+  if (cachedRequest) {
+    return cachedRequest;
+  }
+
   const url = `${API_BASE_URL}/wo/${woId}`;
 
-  try {
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+  const request = (async () => {
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-    if (!response.ok) {
-      console.warn(`Failed to fetch WO ${woId}: ${response.status}`);
+      if (!response.ok) {
+        console.warn(`Failed to fetch WO ${woId}: ${response.status}`);
+        return null;
+      }
+
+      const json = await response.json();
+
+      if (!json.success || !json.result?.wo) {
+        return null;
+      }
+
+      const wo = json.result.wo;
+      const extensions = json.result.extensions || [];
+
+      return {
+        id: wo.id || 0,
+        pcl: wo.pcl || null,
+        start_time: wo.start_time || null,
+        end_time: wo.end_time || null,
+        start_uid: wo.start_uid || null,
+        stop_uid: wo.stop_uid || null,
+        extensions: extensions.map((ext: any) => ({
+          id: ext.id || 0,
+          wo_id: ext.wo_id || woId,
+          extension_time: ext.extension_time || null,
+          extension_comment: ext.extension_comment || null,
+          extension_duration: ext.extension_duration || 0,
+        })),
+        wo_id_str: String(wo.wo_id || woId),
+        part_no: wo.part_no || "",
+        start_name: wo.start_name || "",
+        stop_name: wo.stop_name || "",
+        start_comment:
+          wo.start_comment || wo.start_remarks || wo.start_reason || "",
+        stop_comment:
+          wo.stop_comment || wo.stop_remarks || wo.stop_reason || "",
+        setting: wo.setting || "",
+        alloted_qty: wo.alloted_qty || 0,
+        ok_qty: wo.ok_qty || 0,
+        reject_qty: wo.reject_qty || 0,
+        device_id: wo.device_id || 0,
+        duration: wo.duration || 0,
+        job_type: wo.job_type,
+        target_duration: wo.target_duration,
+        time_saved: wo.time_saved ?? null,
+        load_time: wo.load_time ?? null,
+        idle_time: wo.idle_time ?? null,
+        battery_level: wo.battery_level ?? null,
+        status: wo.status ?? null,
+      };
+    } catch (error) {
+      console.error(`Error fetching WO ${woId}:`, error);
       return null;
+    } finally {
+      woDetailsRequestCache.delete(woId);
     }
+  })();
 
-    const json = await response.json();
-
-    if (!json.success || !json.result?.wo) {
-      return null;
-    }
-
-    const wo = json.result.wo;
-    const extensions = json.result.extensions || [];
-
-    return {
-      id: wo.id || 0,
-      pcl: wo.pcl || null,
-      start_time: wo.start_time || null,
-      end_time: wo.end_time || null,
-      start_uid: wo.start_uid || null,
-      stop_uid: wo.stop_uid || null,
-      extensions: extensions.map((ext: any) => ({
-        id: ext.id || 0,
-        wo_id: ext.wo_id || woId,
-        extension_time: ext.extension_time || null,
-        extension_comment: ext.extension_comment || null,
-        extension_duration: ext.extension_duration || 0,
-      })),
-      wo_id_str: String(wo.wo_id || woId),
-      part_no: wo.part_no || "",
-      start_name: wo.start_name || "",
-      stop_name: wo.stop_name || "",
-      start_comment:
-        wo.start_comment || wo.start_remarks || wo.start_reason || "",
-      stop_comment: wo.stop_comment || wo.stop_remarks || wo.stop_reason || "",
-      setting: wo.setting || "",
-      alloted_qty: wo.alloted_qty || 0,
-      ok_qty: wo.ok_qty || 0,
-      reject_qty: wo.reject_qty || 0,
-      device_id: wo.device_id || 0,
-      duration: wo.duration || 0,
-      job_type: wo.job_type,
-      target_duration: wo.target_duration,
-      time_saved: wo.time_saved ?? null,
-      load_time: wo.load_time ?? null,
-      idle_time: wo.idle_time ?? null,
-      battery_level: wo.battery_level ?? null,
-      status: wo.status ?? null,
-    };
-  } catch (error) {
-    console.error(`Error fetching WO ${woId}:`, error);
-    return null;
-  }
+  woDetailsRequestCache.set(woId, request);
+  return request;
 }
 
 /**

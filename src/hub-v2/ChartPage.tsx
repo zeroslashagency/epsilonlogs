@@ -43,7 +43,11 @@ const HOUR_COLUMNS = (7 * HOURS_PER_DAY) / HOUR_STEP;
 const DAY_COLUMN_SPAN = HOURS_PER_DAY / HOUR_STEP;
 const TIMELINE_MIN_WIDTH =
   MACHINE_COLUMN_WIDTH + HOUR_COLUMNS * HOUR_CELL_WIDTH;
+const CHART_CACHE_TTL_MS = 5 * 60 * 1000;
+const CHART_WEEK_CACHE_PREFIX = "weekly-wo-timeline:";
+const CHART_WO_DETAILS_CACHE_KEY = "weekly-wo-details";
 const weeklyWoRequestCache = new Map<string, Promise<WoSummaryEntry[]>>();
+const weeklyTimelineCache = new Map<string, CachedTimelineWeek>();
 const JOB_TYPE_LEGEND = [
   { label: "Production", swatch: "bg-emerald-500" },
   { label: "Setting", swatch: "bg-sky-500" },
@@ -87,6 +91,131 @@ interface TimelineRow {
   bars: TimelineBar[];
   laneCount: number;
   latestWindow: TimelineWindow | null;
+}
+
+interface CachedTimelineWeek {
+  fetchedAt: number;
+  workOrders: WoSummaryEntry[];
+  woDetailsById: Record<number, WoDetails | null>;
+}
+
+let woDetailsCacheHydrated = false;
+
+function canUseSessionStorage() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.sessionStorage !== "undefined"
+  );
+}
+
+function hydrateWoDetailsCache() {
+  if (woDetailsCacheHydrated || !canUseSessionStorage()) {
+    return;
+  }
+
+  woDetailsCacheHydrated = true;
+
+  try {
+    const raw = window.sessionStorage.getItem(CHART_WO_DETAILS_CACHE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    const parsed = JSON.parse(raw) as Record<string, WoDetails | null>;
+    Object.entries(parsed).forEach(([woId, details]) => {
+      const numericId = Number(woId);
+      if (Number.isFinite(numericId)) {
+        woDetailsMemoryCache.set(numericId, details);
+      }
+    });
+  } catch {
+    window.sessionStorage.removeItem(CHART_WO_DETAILS_CACHE_KEY);
+  }
+}
+
+const woDetailsMemoryCache = new Map<number, WoDetails | null>();
+
+function readCachedWoDetails(woIds: number[]) {
+  hydrateWoDetailsCache();
+
+  const details: Record<number, WoDetails | null> = {};
+  woIds.forEach((woId) => {
+    if (woDetailsMemoryCache.has(woId)) {
+      details[woId] = woDetailsMemoryCache.get(woId) ?? null;
+    }
+  });
+  return details;
+}
+
+function writeCachedWoDetails(details: Record<number, WoDetails | null>) {
+  hydrateWoDetailsCache();
+
+  Object.entries(details).forEach(([woId, value]) => {
+    woDetailsMemoryCache.set(Number(woId), value);
+  });
+
+  if (!canUseSessionStorage()) {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      CHART_WO_DETAILS_CACHE_KEY,
+      JSON.stringify(Object.fromEntries(woDetailsMemoryCache)),
+    );
+  } catch {
+    // Ignore storage quota errors and keep the in-memory cache.
+  }
+}
+
+function readWeekCache(cacheKey: string) {
+  const memoryCached = weeklyTimelineCache.get(cacheKey);
+  if (memoryCached) {
+    return memoryCached;
+  }
+
+  if (!canUseSessionStorage()) {
+    return null;
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(
+      `${CHART_WEEK_CACHE_PREFIX}${cacheKey}`,
+    );
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as CachedTimelineWeek;
+    weeklyTimelineCache.set(cacheKey, parsed);
+    writeCachedWoDetails(parsed.woDetailsById);
+    return parsed;
+  } catch {
+    window.sessionStorage.removeItem(`${CHART_WEEK_CACHE_PREFIX}${cacheKey}`);
+    return null;
+  }
+}
+
+function writeWeekCache(cacheKey: string, entry: CachedTimelineWeek) {
+  weeklyTimelineCache.set(cacheKey, entry);
+  writeCachedWoDetails(entry.woDetailsById);
+
+  if (!canUseSessionStorage()) {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      `${CHART_WEEK_CACHE_PREFIX}${cacheKey}`,
+      JSON.stringify(entry),
+    );
+  } catch {
+    // Ignore storage quota errors and keep the in-memory cache.
+  }
+}
+
+function isWeekCacheFresh(entry: CachedTimelineWeek) {
+  return Date.now() - entry.fetchedAt < CHART_CACHE_TTL_MS;
 }
 
 function buildWeekRange(weekShift = 0) {
@@ -548,6 +677,7 @@ function TimelineBarCard({
 
 export default function ChartPage() {
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [workOrders, setWorkOrders] = useState<WoSummaryEntry[]>([]);
@@ -558,8 +688,18 @@ export default function ChartPage() {
   const [refreshTick, setRefreshTick] = useState(0);
   const [weekShift, setWeekShift] = useState(0);
   const detailRequestsRef = useRef<Set<number>>(new Set());
+  const visibleWeekKeyRef = useRef<string | null>(null);
 
   const weekRange = useMemo(() => buildWeekRange(weekShift), [weekShift]);
+  const weekCacheKey = useMemo(
+    () =>
+      [
+        formatDateForApi(weekRange.start),
+        formatDateForApi(weekRange.end),
+        DEFAULT_DASHBOARD_MACHINE_IDS.join(","),
+      ].join("|"),
+    [weekRange.end, weekRange.start],
+  );
 
   useEffect(() => {
     if (!TOKEN) {
@@ -568,9 +708,30 @@ export default function ChartPage() {
     }
 
     let isActive = true;
+    const cachedWeek = refreshTick === 0 ? readWeekCache(weekCacheKey) : null;
+
+    if (cachedWeek) {
+      setError(null);
+      setWorkOrders(cachedWeek.workOrders);
+      setWoDetailsById(cachedWeek.woDetailsById);
+      setLastRefreshed(new Date(cachedWeek.fetchedAt));
+      detailRequestsRef.current.clear();
+      visibleWeekKeyRef.current = weekCacheKey;
+    } else if (
+      refreshTick === 0 &&
+      visibleWeekKeyRef.current &&
+      visibleWeekKeyRef.current !== weekCacheKey
+    ) {
+      setWorkOrders([]);
+      setWoDetailsById({});
+      setLastRefreshed(null);
+    }
 
     async function loadWorkOrders() {
-      setLoading(true);
+      if (!cachedWeek) {
+        setLoading(true);
+      }
+      setRefreshing(Boolean(cachedWeek));
       setError(null);
 
       try {
@@ -617,22 +778,38 @@ export default function ChartPage() {
         );
 
         const woIds = [...new Set(filtered.map((workOrder) => workOrder.id))];
-        const detailsMap =
-          woIds.length > 0 ? await fetchAllWoDetails(woIds, TOKEN) : new Map();
+        const cachedDetails = readCachedWoDetails(woIds);
+
+        setWorkOrders(filtered);
+        setWoDetailsById(cachedDetails);
+
+        const missingWoIds = woIds.filter(
+          (woId) => cachedDetails[woId] === undefined,
+        );
+        const fetchedDetails =
+          missingWoIds.length > 0
+            ? await fetchAllWoDetails(missingWoIds, TOKEN)
+            : new Map<number, WoDetails>();
 
         if (!isActive) {
           return;
         }
 
-        const detailsRecord: Record<number, WoDetails | null> = {};
-        detailsMap.forEach((details, woId) => {
-          detailsRecord[woId] = details;
+        const detailsRecord = { ...cachedDetails };
+        missingWoIds.forEach((woId) => {
+          detailsRecord[woId] = fetchedDetails.get(woId) ?? null;
+        });
+        writeWeekCache(weekCacheKey, {
+          fetchedAt: Date.now(),
+          workOrders: filtered,
+          woDetailsById: detailsRecord,
         });
 
         setWorkOrders(filtered);
         setWoDetailsById(detailsRecord);
         detailRequestsRef.current.clear();
         setLastRefreshed(new Date());
+        visibleWeekKeyRef.current = weekCacheKey;
       } catch (fetchError) {
         if (!isActive) {
           return;
@@ -646,8 +823,17 @@ export default function ChartPage() {
       } finally {
         if (isActive) {
           setLoading(false);
+          setRefreshing(false);
         }
       }
+    }
+
+    if (cachedWeek && isWeekCacheFresh(cachedWeek)) {
+      setLoading(false);
+      setRefreshing(false);
+      return () => {
+        isActive = false;
+      };
     }
 
     void loadWorkOrders();
@@ -655,7 +841,7 @@ export default function ChartPage() {
     return () => {
       isActive = false;
     };
-  }, [refreshTick, weekRange.end, weekRange.start]);
+  }, [refreshTick, weekCacheKey, weekRange.end, weekRange.start]);
 
   const timelineWindows = useMemo(
     () =>
@@ -690,7 +876,20 @@ export default function ChartPage() {
     : null;
 
   async function ensureWoDetails(woId: number) {
-    if (!TOKEN || woDetailsById[woId] !== undefined || detailRequestsRef.current.has(woId)) {
+    if (
+      !TOKEN ||
+      woDetailsById[woId] !== undefined ||
+      detailRequestsRef.current.has(woId)
+    ) {
+      return;
+    }
+
+    const cachedDetails = readCachedWoDetails([woId])[woId];
+    if (cachedDetails !== undefined) {
+      setWoDetailsById((current) => ({
+        ...current,
+        [woId]: cachedDetails,
+      }));
       return;
     }
 
@@ -698,6 +897,7 @@ export default function ChartPage() {
 
     try {
       const details = await fetchWoDetails(woId, TOKEN);
+      writeCachedWoDetails({ [woId]: details });
       setWoDetailsById((current) => ({
         ...current,
         [woId]: details,
@@ -747,10 +947,10 @@ export default function ChartPage() {
               <button
                 type="button"
                 onClick={() => setRefreshTick((value) => value + 1)}
-                disabled={loading}
+                disabled={loading || refreshing}
                 className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 sm:text-sm"
               >
-                {loading ? (
+                {loading || refreshing ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <RefreshCcw className="h-3.5 w-3.5" />
@@ -781,8 +981,16 @@ export default function ChartPage() {
                   <CardTitle className="mt-2 text-3xl text-slate-900">
                     Weekly WO Timeline
                   </CardTitle>
-                  <CardDescription className="mt-2">
+                  <CardDescription className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span>
                     All 8 machines are loaded from the WO API and each bar is calculated from `start_time` and `end_time`.
+                    </span>
+                    {refreshing ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Syncing latest week data...
+                      </span>
+                    ) : null}
                   </CardDescription>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
