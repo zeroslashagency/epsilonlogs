@@ -788,7 +788,27 @@ export default function ChartPage() {
         );
         const fetchedDetails =
           missingWoIds.length > 0
-            ? await fetchAllWoDetails(missingWoIds, TOKEN)
+            ? await fetchAllWoDetails(missingWoIds, TOKEN, {
+                concurrency: 24,
+                onResult: (woId, details) => {
+                  writeCachedWoDetails({ [woId]: details });
+
+                  if (!isActive) {
+                    return;
+                  }
+
+                  setWoDetailsById((current) => {
+                    if (current[woId] !== undefined) {
+                      return current;
+                    }
+
+                    return {
+                      ...current,
+                      [woId]: details,
+                    };
+                  });
+                },
+              })
             : new Map<number, WoDetails>();
 
         if (!isActive) {

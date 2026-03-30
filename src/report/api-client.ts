@@ -33,6 +33,12 @@ export interface WoDetailsFetchProgress {
   woId: number;
 }
 
+export interface FetchAllWoDetailsOptions {
+  onProgress?: (progress: WoDetailsFetchProgress) => void;
+  onResult?: (woId: number, details: WoDetails | null) => void;
+  concurrency?: number;
+}
+
 export interface WoSummaryFetchConfig {
   startDate: string;
   endDate: string;
@@ -353,7 +359,7 @@ export async function fetchWoDetails(
 export async function fetchAllWoDetails(
   woIds: number[],
   token: string,
-  onProgress?: (progress: WoDetailsFetchProgress) => void,
+  options: FetchAllWoDetailsOptions = {},
 ): Promise<Map<number, WoDetails>> {
   const uniqueIds = [...new Set(woIds)];
   const results = new Map<number, WoDetails>();
@@ -362,7 +368,7 @@ export async function fetchAllWoDetails(
     return results;
   }
 
-  const CONCURRENCY = 10;
+  const CONCURRENCY = Math.max(1, options.concurrency ?? 24);
   const total = uniqueIds.length;
   let index = 0;
   let completed = 0;
@@ -374,9 +380,10 @@ export async function fetchAllWoDetails(
       if (wo) {
         results.set(id, wo);
       }
+      options.onResult?.(id, wo);
 
       completed += 1;
-      onProgress?.({
+      options.onProgress?.({
         completed,
         total,
         woId: id,
