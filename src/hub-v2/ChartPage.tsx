@@ -19,12 +19,17 @@ import {
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import {
+  fetchAllWoDetails,
   fetchWoDetails,
   fetchWoSummaries,
   formatDateForApi,
 } from "../report/api-client";
 import { getMachineLabel } from "../report/machine-config";
-import type { WoDetails, WoSummaryEntry } from "../report/report-types";
+import {
+  mapRawJobTypeToLabel,
+  type WoDetails,
+  type WoSummaryEntry,
+} from "../report/report-types";
 import { DEFAULT_DASHBOARD_MACHINE_IDS } from "./wo-report-utils";
 
 const TOKEN = import.meta.env.VITE_API_TOKEN;
@@ -39,6 +44,17 @@ const DAY_COLUMN_SPAN = HOURS_PER_DAY / HOUR_STEP;
 const TIMELINE_MIN_WIDTH =
   MACHINE_COLUMN_WIDTH + HOUR_COLUMNS * HOUR_CELL_WIDTH;
 const weeklyWoRequestCache = new Map<string, Promise<WoSummaryEntry[]>>();
+const JOB_TYPE_LEGEND = [
+  { label: "Production", swatch: "bg-emerald-500" },
+  { label: "Setting", swatch: "bg-sky-500" },
+  { label: "Calibration", swatch: "bg-amber-500" },
+  { label: "Maintenance", swatch: "bg-rose-500" },
+  { label: "Man", swatch: "bg-violet-500" },
+  { label: "Training", swatch: "bg-cyan-500" },
+  { label: "RD", swatch: "bg-indigo-500" },
+  { label: "Man Production", swatch: "bg-teal-500" },
+  { label: "Man Setting", swatch: "bg-orange-500" },
+] as const;
 
 interface TimelineWindow {
   machineId: number;
@@ -228,6 +244,39 @@ function getStatusTone(status: string) {
   };
 }
 
+function getJobTypeLabel(details: WoDetails | null | undefined) {
+  if (typeof details?.job_type !== "number") {
+    return "Unknown";
+  }
+
+  return mapRawJobTypeToLabel(details.job_type);
+}
+
+function getJobTypeTone(jobTypeLabel: string, status: string) {
+  switch (jobTypeLabel) {
+    case "Production":
+      return "border-emerald-300 bg-emerald-500 text-white shadow-emerald-200/70";
+    case "Setting":
+      return "border-sky-300 bg-sky-500 text-white shadow-sky-200/70";
+    case "Calibration":
+      return "border-amber-300 bg-amber-500 text-white shadow-amber-200/70";
+    case "Maintenance":
+      return "border-rose-300 bg-rose-500 text-white shadow-rose-200/70";
+    case "Man":
+      return "border-violet-300 bg-violet-500 text-white shadow-violet-200/70";
+    case "Training":
+      return "border-cyan-300 bg-cyan-500 text-white shadow-cyan-200/70";
+    case "RD":
+      return "border-indigo-300 bg-indigo-500 text-white shadow-indigo-200/70";
+    case "Man Production":
+      return "border-teal-300 bg-teal-500 text-white shadow-teal-200/70";
+    case "Man Setting":
+      return "border-orange-300 bg-orange-500 text-white shadow-orange-200/70";
+    default:
+      return getStatusTone(status).bar;
+  }
+}
+
 function buildDayTicks(start: Date) {
   return Array.from({ length: 7 }, (_, index) => {
     const value = new Date(start);
@@ -347,19 +396,6 @@ function buildTimelineRows(
   });
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <Card className="border-slate-200 shadow-none">
-      <CardContent className="p-4">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-          {label}
-        </p>
-        <p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
 function TimelineBarCard({
   bar,
   details,
@@ -370,6 +406,7 @@ function TimelineBarCard({
   onInspect: (woId: number) => void;
 }) {
   const statusTone = getStatusTone(bar.status);
+  const jobTypeLabel = getJobTypeLabel(details);
   const operatorName =
     details?.start_name?.trim() ||
     (typeof details?.start_uid === "number"
@@ -380,7 +417,7 @@ function TimelineBarCard({
     <div
       className={cn(
         "group absolute flex min-h-[18px] items-center rounded-md border px-2 text-[11px] font-semibold shadow-sm outline-none",
-        statusTone.bar,
+        getJobTypeTone(jobTypeLabel, bar.status),
       )}
       tabIndex={0}
       onMouseEnter={() => onInspect(bar.woId)}
@@ -417,6 +454,14 @@ function TimelineBarCard({
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs text-slate-600">
+          <div>
+            <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
+              Job Type
+            </p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">
+              {jobTypeLabel}
+            </p>
+          </div>
           <div>
             <p className="font-medium uppercase tracking-[0.14em] text-slate-500">
               Part No
@@ -571,8 +616,21 @@ export default function ChartPage() {
           ),
         );
 
+        const woIds = [...new Set(filtered.map((workOrder) => workOrder.id))];
+        const detailsMap =
+          woIds.length > 0 ? await fetchAllWoDetails(woIds, TOKEN) : new Map();
+
+        if (!isActive) {
+          return;
+        }
+
+        const detailsRecord: Record<number, WoDetails | null> = {};
+        detailsMap.forEach((details, woId) => {
+          detailsRecord[woId] = details;
+        });
+
         setWorkOrders(filtered);
-        setWoDetailsById({});
+        setWoDetailsById(detailsRecord);
         detailRequestsRef.current.clear();
         setLastRefreshed(new Date());
       } catch (fetchError) {
@@ -630,12 +688,6 @@ export default function ChartPage() {
   const nowPercent = isCurrentWeek
     ? getPercentOffset(now, weekRange.start, weekRange.end)
     : null;
-  const machinesWithData = timelineRows.filter(
-    (row) => row.bars.length > 0,
-  ).length;
-  const completedCount = timelineWindows.filter((window) =>
-    window.status.toUpperCase().includes("COMPLETE"),
-  ).length;
 
   async function ensureWoDetails(woId: number) {
     if (!TOKEN || woDetailsById[woId] !== undefined || detailRequestsRef.current.has(woId)) {
@@ -767,32 +819,25 @@ export default function ChartPage() {
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <StatCard
-                label="Machines With WOs"
-                value={`${machinesWithData}/${DEFAULT_DASHBOARD_MACHINE_IDS.length}`}
-              />
-              <StatCard
-                label="Work Orders"
-                value={timelineWindows.length.toLocaleString()}
-              />
-              <StatCard
-                label="Completed"
-                value={completedCount.toLocaleString()}
-              />
-              <StatCard
-                label="Updated"
-                value={
-                  lastRefreshed
-                    ? new Intl.DateTimeFormat(undefined, {
-                        day: "2-digit",
-                        month: "short",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      }).format(lastRefreshed)
-                    : "Waiting"
-                }
-              />
+            <CardContent className="pt-0">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Job Type Key
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {JOB_TYPE_LEGEND.map((item) => (
+                    <div
+                      key={item.label}
+                      className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+                    >
+                      <span
+                        className={cn("h-2.5 w-2.5 rounded-full", item.swatch)}
+                      />
+                      <span>{item.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </CardContent>
           </Card>
 
